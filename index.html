@@ -24,6 +24,22 @@
     --font-mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
   }
 
+  :root.light {
+    --bg:      #f0f4fa;
+    --surface: #ffffff;
+    --card:    #e8eef8;
+    --border:  #c8d4e8;
+    --text:    #1a2540;
+    --muted:   #6a80a8;
+    --accent:  #0077cc;
+    --green:   #00995a;
+    --blue:    #2255cc;
+    --orange:  #d46a00;
+    --purple:  #6d4fc4;
+    --red:     #cc1a3a;
+    --yellow:  #b08000;
+  }
+
   body {
     background: var(--bg);
     color: var(--text);
@@ -429,10 +445,18 @@
 
 <header>
   <div class="logo">BGP</div>
-  <div>
+  <div style="flex:1">
     <h1>BGP Intelligence Tool</h1>
     <p>ASN discovery · Prefix analysis · Upstream partners · Peering data · Routing history</p>
   </div>
+  <button id="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark mode" style="
+    background: var(--card); border: 1px solid var(--border); border-radius: 20px;
+    padding: 6px 14px; cursor: pointer; display: flex; align-items: center; gap: 8px;
+    color: var(--text); font-size: 13px; font-weight: 600; transition: all .2s; white-space: nowrap;
+  ">
+    <span id="theme-icon" style="font-size:16px">🌙</span>
+    <span id="theme-label">Dark</span>
+  </button>
 </header>
 
 <div class="search-section">
@@ -638,6 +662,26 @@
 </div>
 
 <script>
+// ─────────────────────────────────────────────
+//  Theme
+// ─────────────────────────────────────────────
+function toggleTheme() {
+  const isLight = document.documentElement.classList.toggle('light');
+  document.getElementById('theme-icon').textContent  = isLight ? '☀️' : '🌙';
+  document.getElementById('theme-label').textContent = isLight ? 'Light' : 'Dark';
+  localStorage.setItem('bgp-theme', isLight ? 'light' : 'dark');
+}
+(function() {
+  const saved = localStorage.getItem('bgp-theme');
+  if (saved === 'light') {
+    document.documentElement.classList.add('light');
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('theme-icon').textContent  = '☀️';
+      document.getElementById('theme-label').textContent = 'Light';
+    });
+  }
+})();
+
 // ─────────────────────────────────────────────
 //  Config
 // ─────────────────────────────────────────────
