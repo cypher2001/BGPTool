@@ -537,7 +537,17 @@
 
     <!-- Tab 2: Upstreams -->
     <div class="tab-panel" id="panel-upstreams">
-      <p class="section-title">Upstream providers (transit providers) sorted by number of downstream ASNs</p>
+      <p class="section-title">Transit upstream providers — sorted by RIPE routing power score</p>
+      <div style="background:rgba(255,165,0,0.08);border:1px solid rgba(255,165,0,0.25);border-radius:6px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:var(--muted);line-height:1.6">
+        <strong style="color:var(--orange)">ℹ Data source note:</strong>
+        RIPE STAT aggregates route collector data over a <strong>7–30 day rolling window</strong>, so historical upstreams that are no longer active may appear.
+        Tools like BGP.tools show only <em>live</em> BGP sessions. Use the <strong>Power score</strong> to identify active primary transit — lower scores often indicate historical or backup paths.
+        <br><label style="margin-top:6px;display:inline-flex;align-items:center;gap:6px;cursor:pointer">
+          Min power: <input type="range" id="power-filter" min="0" max="100" value="0" style="width:120px;accent-color:var(--orange)" oninput="filterUpstreams(this.value)">
+          <span id="power-filter-val" style="color:var(--orange);font-weight:700;min-width:24px">0</span>
+          <span style="color:var(--muted)">(hide low-power historical entries)</span>
+        </label>
+      </div>
       <div class="table-wrap">
         <table id="ups-table">
           <thead>
@@ -545,9 +555,11 @@
               <th onclick="sortTable('ups-table',0)">Upstream ASN <span class="sort-icon"></span></th>
               <th onclick="sortTable('ups-table',1)">Company Name <span class="sort-icon"></span></th>
               <th onclick="sortTable('ups-table',2)">Country <span class="sort-icon"></span></th>
-              <th onclick="sortTable('ups-table',3)"># Downstream ASNs <span class="sort-icon"></span></th>
-              <th>IP Version(s)</th>
-              <th>PeeringDB Info</th>
+              <th onclick="sortTable('ups-table',3)"># Customer ASNs <span class="sort-icon"></span></th>
+              <th onclick="sortTable('ups-table',4)">IP Version(s) <span class="sort-icon"></span></th>
+              <th onclick="sortTable('ups-table',5)">Routing Power ↕ <span class="sort-icon"></span></th>
+              <th onclick="sortTable('ups-table',6)">Prefixes Advertised <span class="sort-icon"></span></th>
+              <th>PeeringDB</th>
             </tr>
           </thead>
           <tbody id="ups-table-body"></tbody>
@@ -1032,14 +1044,35 @@ function renderUpstreams() {
   const ups = Object.values(state.upstreamMap)
     .map(u => ({ ...u, downstream_asns: [...u.downstream_asns] }))
     .sort((a,b) => (b.power||0)-(a.power||0) || b.downstream_asns.length-a.downstream_asns.length);
+
+  const maxPower = Math.max(...ups.map(u => u.power||0), 1);
   const tbody = document.getElementById('ups-table-body');
   tbody.innerHTML = '';
+
   for (const u of ups) {
+    const powerVal  = u.power || 0;
+    const powerPct  = Math.round(powerVal / maxPower * 100);
+    // Power colour: green=high, yellow=medium, red=low (likely historical)
+    const powerColor = powerPct >= 60 ? 'var(--green)' : powerPct >= 25 ? 'var(--yellow)' : '#e05';
+
+    // Tally prefixes that customers advertise through this upstream
+    let totalV4Pfx = 0, totalV4IPs = 0, totalV6Pfx = 0;
+    for (const downASN of u.downstream_asns) {
+      const rec = state.asnRecords.find(r => r.asn === downASN);
+      if (rec) { totalV4Pfx += rec.ipv4Prefixes.length; totalV4IPs += rec.ipv4Total; totalV6Pfx += rec.ipv6Prefixes.length; }
+    }
+    const pfxCell = [
+      totalV4Pfx ? `<span class="pill pill-green">${totalV4Pfx} v4 pfx</span> <span style="color:var(--muted);font-size:11px">${fmtNum(totalV4IPs)} IPs</span>` : '',
+      totalV6Pfx ? `<span class="pill pill-blue">${totalV6Pfx} v6 pfx</span>` : '',
+    ].filter(Boolean).join('<br>') || '—';
+
     const verBadges = [u.v4_peers>0?'<span class="pill pill-green">IPv4</span>':'', u.v6_peers>0?'<span class="pill pill-blue">IPv6</span>':''].filter(Boolean).join(' ') || '—';
     const pdbEntry  = state.peeringData.find(p => p.asn === u.asn);
     const pdbInfo   = pdbEntry ? `<span class="pill pill-purple">${pdbEntry.net?.info_type||'Listed'}</span>` : '—';
     const downList  = u.downstream_asns.map(a=>`<span class="pill pill-muted">AS${a}</span>`).join(' ');
+
     const tr = document.createElement('tr');
+    tr.dataset.power = powerVal;
     tr.innerHTML = `
       <td><span class="mono" style="color:var(--orange)">AS${u.asn}</span></td>
       <td><strong style="color:#fff">${u.name||'—'}</strong></td>
@@ -1049,14 +1082,29 @@ function renderUpstreams() {
         <div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:3px">${downList}</div>
       </td>
       <td>${verBadges}</td>
-      <td>${pdbInfo} <span style="color:var(--muted);font-size:11px">power:${u.power||0}</span></td>`;
+      <td data-sort="${powerVal}">
+        <div class="bar-wrap">
+          <div class="bar-track"><div class="bar-fill" style="width:${powerPct}%;background:${powerColor}"></div></div>
+          <div class="bar-num" style="color:${powerColor}">${powerVal} pts</div>
+        </div>
+        ${powerPct < 25 ? '<div style="font-size:10px;color:#e05;margin-top:2px">⚠ may be historical</div>' : ''}
+      </td>
+      <td data-sort="${totalV4IPs}">${pfxCell}</td>
+      <td>${pdbInfo}</td>`;
     tbody.appendChild(tr);
   }
   if (!ups.length) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td colspan="6" style="text-align:center;color:var(--muted);padding:30px">No upstream data</td>`;
+    tr.innerHTML = `<td colspan="8" style="text-align:center;color:var(--muted);padding:30px">No upstream data</td>`;
     tbody.appendChild(tr);
   }
+}
+
+function filterUpstreams(minPower) {
+  document.getElementById('power-filter-val').textContent = minPower;
+  document.querySelectorAll('#ups-table-body tr').forEach(tr => {
+    tr.style.display = (parseInt(tr.dataset.power||0) >= parseInt(minPower)) ? '' : 'none';
+  });
 }
 
 function renderPrefixes() {
