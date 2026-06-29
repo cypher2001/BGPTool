@@ -562,6 +562,7 @@
               <th onclick="sortTable('asn-table',7)" title="IPv6 prefixes advertised"># IPv6 Pfx <span class="sort-icon"></span></th>
               <th style="min-width:180px">IPv6 Space</th>
               <th>Visibility</th>
+              <th title="Percentage of this ASN's prefixes covered by a valid RPKI Route Origin Authorization">ROA Coverage</th>
               <th>Type</th>
               <th>Links</th>
             </tr>
@@ -615,14 +616,15 @@
         <table id="ups-table">
           <thead>
             <tr>
-              <th onclick="sortTable('ups-table',0)">Upstream ASN <span class="sort-icon"></span></th>
-              <th onclick="sortTable('ups-table',1)">Company Name <span class="sort-icon"></span></th>
-              <th onclick="sortTable('ups-table',2)">Country <span class="sort-icon"></span></th>
-              <th onclick="sortTable('ups-table',3)"># Customer ASNs <span class="sort-icon"></span></th>
-              <th onclick="sortTable('ups-table',4)">IP Version(s) <span class="sort-icon"></span></th>
-              <th onclick="sortTable('ups-table',5)">Routing Power ↕ <span class="sort-icon"></span></th>
-              <th onclick="sortTable('ups-table',6)">Prefixes Advertised <span class="sort-icon"></span></th>
-              <th>AskBGP Validation</th>
+              <th title="Composite score: live confirmation + routing power">Relevance</th>
+              <th onclick="sortTable('ups-table',1)">Upstream ASN <span class="sort-icon"></span></th>
+              <th onclick="sortTable('ups-table',2)">Company Name <span class="sort-icon"></span></th>
+              <th onclick="sortTable('ups-table',3)">Country <span class="sort-icon"></span></th>
+              <th onclick="sortTable('ups-table',4)"># Customer ASNs <span class="sort-icon"></span></th>
+              <th onclick="sortTable('ups-table',5)">IP Version(s) <span class="sort-icon"></span></th>
+              <th onclick="sortTable('ups-table',6)">Routing Power <span class="sort-icon"></span></th>
+              <th onclick="sortTable('ups-table',7)">Prefixes Advertised <span class="sort-icon"></span></th>
+              <th title="Live route confirmation via AskBGP">Live Confirmation</th>
               <th>PeeringDB</th>
             </tr>
           </thead>
@@ -638,7 +640,7 @@
         <table id="pfx-table">
           <thead>
             <tr>
-              <th>Expand</th>
+              <th title="RPKI Route Origin Authorization status from AskBGP">RPKI / ROA</th>
               <th onclick="sortTable('pfx-table',1)">ASN <span class="sort-icon"></span></th>
               <th onclick="sortTable('pfx-table',2)">Network Name <span class="sort-icon"></span></th>
               <th onclick="sortTable('pfx-table',3)">Prefix <span class="sort-icon"></span></th>
@@ -646,7 +648,7 @@
               <th onclick="sortTable('pfx-table',5)">Size (IPs / /48s) <span class="sort-icon"></span></th>
               <th>Description</th>
               <th>Country</th>
-              <th title="RPKI Route Origin Authorization status from AskBGP">RPKI / ROA</th>
+              <th>Expand</th>
             </tr>
           </thead>
           <tbody id="pfx-table-body"></tbody>
@@ -1178,6 +1180,15 @@ function renderStats() {
   document.getElementById('badge-hist').textContent  = state.historyEntries.length;
 }
 
+// Returns { valid, total, pct } for an ASN's ROA coverage across its announced prefixes
+function getRoaCoverage(asn) {
+  const pfxForAsn = state.allPrefixes.filter(p => p.asn == asn);
+  if (!pfxForAsn.length || !Object.keys(state.roaByASN).length) return null;
+  const roaMap = state.roaByASN[asn] || {};
+  const valid = pfxForAsn.filter(p => roaMap[p.prefix]).length;
+  return { valid, total: pfxForAsn.length, pct: Math.round(100 * valid / pfxForAsn.length) };
+}
+
 function renderASNTable() {
   const recs  = state.asnRecords;
   const maxV4 = Math.max(...recs.map(r=>r.ipv4Total), 1);
@@ -1212,6 +1223,12 @@ function renderASNTable() {
         <div class="bar-num">${fmtNum(rec.ipv6Total48s)} /48s</div></div>
       </td>
       <td><span style="color:${visPct==='—'?'var(--muted)':parseInt(visPct)>80?'var(--green)':'var(--yellow)'}">${visPct}</span></td>
+      <td>${(() => {
+        const cov = getRoaCoverage(rec.asn);
+        if (!cov) return '<span style="color:var(--muted);font-size:11px">—</span>';
+        const color = cov.pct >= 80 ? 'var(--green)' : cov.pct >= 40 ? 'var(--yellow)' : 'var(--red)';
+        return `<span style="color:${color};font-weight:700">${cov.pct}%</span><span style="color:var(--muted);font-size:10px"> (${cov.valid}/${cov.total})</span>`;
+      })()}</td>
       <td>${typeBadge}</td>
       <td style="white-space:nowrap">
         <a href="https://bgp.tools/as/${rec.asn}" target="_blank" style="color:var(--accent);font-size:11px;text-decoration:none;display:block">↗ BGP.tools</a>
@@ -1222,9 +1239,14 @@ function renderASNTable() {
 }
 
 function renderUpstreams() {
+  const hasLiveData = Object.keys(state.liveUpstreams).length > 0;
   const ups = Object.values(state.upstreamMap)
-    .map(u => ({ ...u, downstream_asns: [...u.downstream_asns] }))
-    .sort((a,b) => (b.power||0)-(a.power||0) || b.downstream_asns.length-a.downstream_asns.length);
+    .map(u => {
+      const isLive = hasLiveData && !!state.liveUpstreams[u.asn];
+      const relevance = (isLive ? 10000 : 0) + (u.power || 0);
+      return { ...u, downstream_asns: [...u.downstream_asns], isLive, relevance };
+    })
+    .sort((a,b) => b.relevance - a.relevance || b.downstream_asns.length - a.downstream_asns.length);
 
   const maxPower = Math.max(...ups.map(u => u.power||0), 1);
   const tbody = document.getElementById('ups-table-body');
@@ -1233,10 +1255,28 @@ function renderUpstreams() {
   for (const u of ups) {
     const powerVal  = u.power || 0;
     const powerPct  = Math.round(powerVal / maxPower * 100);
-    // Power colour: green=high, yellow=medium, red=low (likely historical)
-    const powerColor = powerVal >= 60 ? 'var(--green)' : powerVal >= 25 ? 'var(--yellow)' : '#e05';
+    const powerColor = powerVal >= 60 ? 'var(--green)' : powerVal >= 25 ? 'var(--yellow)' : 'var(--red)';
+    const liveData  = state.liveUpstreams[u.asn];
 
-    // Tally prefixes that customers advertise through this upstream
+    // Relevance tier badge — live confirmation is the primary signal
+    let relevanceBadge;
+    if (u.isLive && powerVal >= 60) {
+      relevanceBadge = `<span style="background:rgba(0,200,100,.15);color:var(--green);padding:3px 8px;border-radius:5px;font-size:11px;font-weight:700;white-space:nowrap">★ Verified Primary</span>`;
+    } else if (u.isLive && powerVal >= 25) {
+      relevanceBadge = `<span style="background:rgba(255,200,0,.12);color:var(--yellow);padding:3px 8px;border-radius:5px;font-size:11px;font-weight:700;white-space:nowrap">✓ Verified Backup</span>`;
+    } else if (u.isLive) {
+      relevanceBadge = `<span style="background:rgba(255,200,0,.1);color:var(--yellow);padding:3px 8px;border-radius:5px;font-size:11px;font-weight:600;white-space:nowrap">✓ Live (low reach)</span>`;
+    } else if (!hasLiveData) {
+      relevanceBadge = `<span style="color:var(--muted);font-size:11px">—</span>`;
+    } else if (powerVal >= 60) {
+      relevanceBadge = `<span style="background:rgba(100,150,255,.1);color:var(--accent);padding:3px 8px;border-radius:5px;font-size:11px;font-weight:600;white-space:nowrap">⚡ Potential Primary</span>`;
+    } else if (powerVal >= 25) {
+      relevanceBadge = `<span style="color:var(--muted);font-size:11px;font-weight:600">Unconfirmed</span>`;
+    } else {
+      relevanceBadge = `<span style="color:var(--muted);font-size:11px">Historical</span>`;
+    }
+
+    // Tally prefixes for downstream ASNs
     let totalV4Pfx = 0, totalV4IPs = 0, totalV6Pfx = 0;
     for (const downASN of u.downstream_asns) {
       const rec = state.asnRecords.find(r => r.asn === downASN);
@@ -1252,9 +1292,7 @@ function renderUpstreams() {
     const pdbInfo   = pdbEntry ? `<span class="pill pill-purple">${pdbEntry.net?.info_type||'Listed'}</span>` : '—';
     const downList  = u.downstream_asns.map(a=>`<span class="pill pill-muted">AS${a}</span>`).join(' ');
 
-    // AskBGP live validation
-    const liveData = state.liveUpstreams[u.asn];
-    const hasLiveData = Object.keys(state.liveUpstreams).length > 0;
+    // Live confirmation cell
     let liveCell;
     if (!hasLiveData) {
       liveCell = '<span style="color:var(--muted);font-size:11px">—</span>';
@@ -1263,12 +1301,16 @@ function renderUpstreams() {
       const v6 = liveData.v6Routes ? `<span class="pill pill-blue">✓ ${liveData.v6Routes} v6 routes</span>` : '';
       liveCell = [v4, v6].filter(Boolean).join('<br>') || '<span class="pill pill-green">✓ Live</span>';
     } else {
-      liveCell = `<span style="background:rgba(255,77,109,.1);color:var(--red);padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">✗ Not seen by AskBGP</span>`;
+      liveCell = `<span style="background:rgba(255,77,109,.1);color:var(--red);padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">✗ Not confirmed</span>`;
     }
 
     const tr = document.createElement('tr');
     tr.dataset.power = powerVal;
+    tr.dataset.relevance = u.relevance;
+    // Highlight verified primaries
+    if (u.isLive && powerVal >= 60) tr.style.borderLeft = '3px solid var(--green)';
     tr.innerHTML = `
+      <td style="text-align:center">${relevanceBadge}</td>
       <td>
         <span class="mono" style="color:var(--orange)">AS${u.asn}</span><br>
         <a href="https://bgp.tools/as/${u.asn}" target="_blank" style="font-size:10px;color:var(--muted);text-decoration:none" title="View on BGP.tools">↗ bgp.tools</a>
@@ -1285,7 +1327,7 @@ function renderUpstreams() {
           <div class="bar-track"><div class="bar-fill" style="width:${powerPct}%;background:${powerColor}"></div></div>
           <div class="bar-num" style="color:${powerColor}">${powerVal} pts</div>
         </div>
-        ${powerVal < 25 ? '<div style="font-size:10px;color:#e05;margin-top:2px">⚠ may be historical</div>' : ''}
+        ${powerVal < 25 ? '<div style="font-size:10px;color:var(--red);margin-top:2px">⚠ may be historical</div>' : ''}
       </td>
       <td data-sort="${totalV4IPs}">${pfxCell}</td>
       <td>${liveCell}</td>
@@ -1294,7 +1336,7 @@ function renderUpstreams() {
   }
   if (!ups.length) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td colspan="8" style="text-align:center;color:var(--muted);padding:30px">No upstream data</td>`;
+    tr.innerHTML = `<td colspan="10" style="text-align:center;color:var(--muted);padding:30px">No upstream data</td>`;
     tbody.appendChild(tr);
   }
 }
@@ -1307,7 +1349,16 @@ function filterUpstreams(minPower) {
 }
 
 function renderPrefixes() {
-  const prefs = [...state.allPrefixes].sort((a,b) => b.size - a.size);
+  // ROA-valid prefixes first, then sort by size within each group
+  const hasAnyRoa = Object.keys(state.roaByASN).length > 0;
+  const prefs = [...state.allPrefixes].sort((a, b) => {
+    if (hasAnyRoa) {
+      const aRoa = !!(state.roaByASN[a.asn] || {})[a.prefix];
+      const bRoa = !!(state.roaByASN[b.asn] || {})[b.prefix];
+      if (bRoa !== aRoa) return bRoa ? 1 : -1; // ROA valid first
+    }
+    return b.size - a.size;
+  });
   const tbody = document.getElementById('pfx-table-body');
   tbody.innerHTML = '';
 
@@ -1333,8 +1384,10 @@ function renderPrefixes() {
     }
 
     const tr = document.createElement('tr');
+    if (roa) tr.style.borderLeft = '3px solid var(--green)';
+    else if (hasAnyRoa) tr.style.borderLeft = '3px solid rgba(255,77,109,.35)';
     tr.innerHTML = `
-      <td></td>
+      <td>${rpkiCell}</td>
       <td><span class="mono" style="color:var(--accent)">AS${p.asn}</span></td>
       <td style="color:var(--muted);font-size:12px">${p.asnName||'—'}</td>
       <td>
@@ -1345,7 +1398,7 @@ function renderPrefixes() {
       <td data-sort="${p.size}" class="mono" style="color:var(--text)">${sizeStr}</td>
       <td style="color:var(--muted);font-size:12px">${p.desc}</td>
       <td>${p.country||'—'}</td>
-      <td>${rpkiCell}</td>
+      <td></td>
     `;
     tbody.appendChild(tr);
   }
