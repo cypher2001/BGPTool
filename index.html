@@ -538,15 +538,42 @@
     <!-- Tab 2: Upstreams -->
     <div class="tab-panel" id="panel-upstreams">
       <p class="section-title">Transit upstream providers — sorted by RIPE routing power score</p>
-      <div style="background:rgba(255,165,0,0.08);border:1px solid rgba(255,165,0,0.25);border-radius:6px;padding:10px 14px;margin-bottom:12px;font-size:12px;color:var(--muted);line-height:1.6">
+      <div style="background:rgba(255,165,0,0.08);border:1px solid rgba(255,165,0,0.25);border-radius:6px;padding:12px 16px;margin-bottom:12px;font-size:12px;color:var(--muted);line-height:1.7">
         <strong style="color:var(--orange)">ℹ Data source note:</strong>
         RIPE STAT aggregates route collector data over a <strong>7–30 day rolling window</strong>, so historical upstreams that are no longer active may appear.
-        Tools like BGP.tools show only <em>live</em> BGP sessions. Use the <strong>Power score</strong> to identify active primary transit — lower scores often indicate historical or backup paths.
-        <br><label style="margin-top:6px;display:inline-flex;align-items:center;gap:6px;cursor:pointer">
-          Min power: <input type="range" id="power-filter" min="0" max="100" value="0" style="width:120px;accent-color:var(--orange)" oninput="filterUpstreams(this.value)">
-          <span id="power-filter-val" style="color:var(--orange);font-weight:700;min-width:24px">0</span>
-          <span style="color:var(--muted)">(hide low-power historical entries)</span>
-        </label>
+        Tools like BGP.tools show only <em>live</em> BGP sessions.
+
+        <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:10px;align-items:stretch">
+          <!-- Power scale legend -->
+          <div style="flex:1;min-width:260px;background:rgba(0,0,0,0.25);border-radius:6px;padding:10px 14px">
+            <div style="color:#ccc;font-weight:700;margin-bottom:8px;font-size:11px;letter-spacing:.05em;text-transform:uppercase">Routing Power Scale</div>
+            <div style="font-size:11px;color:var(--muted);margin-bottom:6px">How much of this ASN's routing table does the upstream carry, as seen from RIPE's global vantage points? Higher = more routes propagated = more active transit.</div>
+            <div style="display:flex;flex-direction:column;gap:5px;margin-top:8px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:12px;height:12px;border-radius:2px;background:var(--green);flex-shrink:0"></div>
+                <span><strong style="color:var(--green)">60–100 pts</strong> — Primary active transit. Carrying full or near-full routing table. This is a live, core transit provider.</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:12px;height:12px;border-radius:2px;background:var(--yellow);flex-shrink:0"></div>
+                <span><strong style="color:var(--yellow)">25–59 pts</strong> — Secondary or partial transit. May be a backup provider, single-PoP connection, or regional carrier carrying a subset of prefixes.</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="width:12px;height:12px;border-radius:2px;background:#e05;flex-shrink:0"></div>
+                <span><strong style="color:#e05">0–24 pts</strong> — Likely historical. Session may be inactive, stale in RIPE's window, or only seen by a few route collectors. Treat with caution.</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Filter -->
+          <div style="display:flex;flex-direction:column;justify-content:center;gap:6px;min-width:200px">
+            <div style="color:#ccc;font-weight:700;font-size:11px;letter-spacing:.05em;text-transform:uppercase">Filter by Min Power</div>
+            <div style="font-size:11px;color:var(--muted)">Drag right to hide historical/inactive entries and match live-tool counts (e.g. BGP.tools).</div>
+            <label style="display:flex;align-items:center;gap:8px;margin-top:4px;cursor:pointer">
+              <input type="range" id="power-filter" min="0" max="100" value="0" style="width:130px;accent-color:var(--orange)" oninput="filterUpstreams(this.value)">
+              <span style="color:var(--orange);font-weight:700;font-size:15px;min-width:30px" id="power-filter-val">0</span>
+            </label>
+          </div>
+        </div>
       </div>
       <div class="table-wrap">
         <table id="ups-table">
