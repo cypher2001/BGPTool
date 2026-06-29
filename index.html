@@ -859,11 +859,6 @@ async function startSearch() {
   setProgress(15);
   log(`Found ${asns.length} unique ASN(s) — enriching…`, 'inf');
 
-  // Deduplicate
-  const seen = new Set();
-  asns = asns.filter(a => { if (seen.has(a.asn)) return false; seen.add(a.asn); return true; });
-  log(`Total unique ASNs: ${asns.length}`, 'inf');
-
   // ── Step 2: Enrich each ASN ──
   const step = 60 / asns.length;
   let prog = 15;
