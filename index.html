@@ -563,6 +563,7 @@
               <th style="min-width:180px">IPv6 Space</th>
               <th>Visibility</th>
               <th>Type</th>
+              <th>Links</th>
             </tr>
           </thead>
           <tbody id="asn-table-body"></tbody>
@@ -621,6 +622,7 @@
               <th onclick="sortTable('ups-table',4)">IP Version(s) <span class="sort-icon"></span></th>
               <th onclick="sortTable('ups-table',5)">Routing Power ↕ <span class="sort-icon"></span></th>
               <th onclick="sortTable('ups-table',6)">Prefixes Advertised <span class="sort-icon"></span></th>
+              <th>AskBGP Validation</th>
               <th>PeeringDB</th>
             </tr>
           </thead>
@@ -644,6 +646,7 @@
               <th onclick="sortTable('pfx-table',5)">Size (IPs / /48s) <span class="sort-icon"></span></th>
               <th>Description</th>
               <th>Country</th>
+              <th title="RPKI Route Origin Authorization status from AskBGP">RPKI / ROA</th>
             </tr>
           </thead>
           <tbody id="pfx-table-body"></tbody>
@@ -708,7 +711,9 @@ let state = {
   allPrefixes: [],
   peeringData: [],
   historyEntries: [],
-  errors: [],        // { asn, label, type: 'timeout'|'error', msg }
+  errors: [],          // { asn, label, type: 'timeout'|'error', msg }
+  liveUpstreams: {},   // asn -> { v4Routes, v6Routes } confirmed by AskBGP
+  roaByASN: {},        // asn -> { 'subnet/len': { prefix_max_length, ta, timestamp } }
 };
 
 // ─────────────────────────────────────────────
@@ -799,6 +804,10 @@ const api = {
   ripeNeighbours: asn  => fetchJ(`https://stat.ripe.net/data/asn-neighbours/data.json?resource=AS${asn}&sourceapp=bgpintel`),
   ripeVisibility: asn  => fetchJ(`https://stat.ripe.net/data/visibility/data.json?resource=AS${asn}&sourceapp=bgpintel`),
   ripeAsNames:    asns => fetchJ(`https://stat.ripe.net/data/as-names/data.json?resource=${asns.map(a=>'AS'+a).join(',')}&sourceapp=bgpintel`),
+  // AskBGP (replay.bgphelp.com) — via /api/proxy to add CORS headers
+  askbgpSummary: (asn,s,e) => fetchJ(`/api/proxy?path=/v2/summary/as&originating_asn=${asn}&start_time=${s}&end_time=${e}`),
+  askbgpRoa:      asn      => fetchJ(`/api/proxy?path=/v2/roa/as&originating_asn=${asn}`),
+  askbgpIrr:      asn      => fetchJ(`/api/proxy?path=/v2/irr/as&irr_asns=${asn}`),
 };
 
 async function tryF(fn, label, asn=null) {
@@ -931,19 +940,27 @@ async function enrichASN(asnObj, useRIPE, usePDB) {
     fetchErrors: [],   // per-ASN error list for UI flags
   };
 
-  // Fire all requests for this ASN in parallel
-  const [announcedRes, neighboursRes, visRes, pdbRes] = await Promise.all([
-    useRIPE ? tryF(() => api.ripeAnnounced(asn),  `RIPE prefixes`,   asn) : null,
-    useRIPE ? tryF(() => api.ripeNeighbours(asn), `RIPE neighbours`, asn) : null,
-    useRIPE ? tryF(() => api.ripeVisibility(asn), `RIPE visibility`, asn) : null,
-    usePDB  ? tryF(() => api.pdbByASN(asn),       `PeeringDB`,       asn) : null,
+  // Fire ALL requests for this ASN in parallel (RIPE + PeeringDB + AskBGP)
+  const now7d = Math.floor(Date.now()/1000);
+  const week7d = now7d - 7*24*3600;
+
+  const [announcedRes, neighboursRes, visRes, pdbRes, summaryRes, roaRes, irrRes] = await Promise.all([
+    useRIPE ? tryF(() => api.ripeAnnounced(asn),          `RIPE prefixes`,   asn) : null,
+    useRIPE ? tryF(() => api.ripeNeighbours(asn),         `RIPE neighbours`, asn) : null,
+    useRIPE ? tryF(() => api.ripeVisibility(asn),         `RIPE visibility`, asn) : null,
+    usePDB  ? tryF(() => api.pdbByASN(asn),               `PeeringDB`,       asn) : null,
+    tryF(() => api.askbgpSummary(asn, week7d, now7d),     `AskBGP summary`,  asn),
+    tryF(() => api.askbgpRoa(asn),                        `AskBGP ROA`,      asn),
+    tryF(() => api.askbgpIrr(asn),                        `AskBGP IRR`,      asn),
   ]);
 
-  // Record which calls failed for this ASN
-  if (useRIPE && !announcedRes)  rec.fetchErrors.push({ src:'RIPE', call:'Prefixes' });
-  if (useRIPE && !neighboursRes) rec.fetchErrors.push({ src:'RIPE', call:'Neighbours' });
-  if (useRIPE && !visRes)        rec.fetchErrors.push({ src:'RIPE', call:'Visibility' });
-  if (usePDB  && !pdbRes)        rec.fetchErrors.push({ src:'PDB',  call:'PeeringDB' });
+  // Record which calls failed
+  if (useRIPE && !announcedRes)  rec.fetchErrors.push({ src:'RIPE',   call:'Prefixes' });
+  if (useRIPE && !neighboursRes) rec.fetchErrors.push({ src:'RIPE',   call:'Neighbours' });
+  if (useRIPE && !visRes)        rec.fetchErrors.push({ src:'RIPE',   call:'Visibility' });
+  if (usePDB  && !pdbRes)        rec.fetchErrors.push({ src:'PDB',    call:'PeeringDB' });
+  if (!summaryRes)               rec.fetchErrors.push({ src:'AskBGP', call:'Summary' });
+  if (!roaRes)                   rec.fetchErrors.push({ src:'AskBGP', call:'ROA' });
 
   // ── Prefixes + history ──
   for (const p of (announcedRes?.data?.prefixes || [])) {
@@ -985,6 +1002,44 @@ async function enrichASN(asnObj, useRIPE, usePDB) {
     state.peeringData.push({ asn, name: rec.name, net });
   }
 
+  // ── AskBGP: IRR enrichment ──
+  if (irrRes?.length) {
+    const irr = irrRes[0];
+    if (rec.name === `AS${asn}`) rec.name = irr.as_description || rec.name;
+    if (!rec.country) rec.country = irr.as_country || '';
+    if (!rec.rir)     rec.rir     = irr.as_source   || '';
+    log(`AS${asn} IRR: ${irr.as_name} (${irr.as_source})`, 'ok');
+  }
+
+  // ── AskBGP: live upstream validation (summary) ──
+  // Each snapshot key is an observer ASN; routes>0 = that ASN is actively carrying our prefixes
+  if (Array.isArray(summaryRes)) {
+    for (const snap of summaryRes) {
+      const version = snap.version; // 'IPv4' | 'IPv6'
+      for (const [asnStr, info] of Object.entries(snap)) {
+        if (asnStr === 'timestamp' || asnStr === 'version') continue;
+        if (info.routes > 0) {
+          const upASN = parseInt(asnStr);
+          if (!state.liveUpstreams[upASN]) state.liveUpstreams[upASN] = { v4Routes:0, v6Routes:0 };
+          if (version === 'IPv4') state.liveUpstreams[upASN].v4Routes = Math.max(state.liveUpstreams[upASN].v4Routes, info.routes);
+          else                    state.liveUpstreams[upASN].v6Routes = Math.max(state.liveUpstreams[upASN].v6Routes, info.routes);
+        }
+      }
+    }
+    const liveCount = Object.keys(state.liveUpstreams).length;
+    log(`AS${asn} AskBGP: ${liveCount} confirmed live upstream(s)`, 'ok');
+  }
+
+  // ── AskBGP: ROA / RPKI validation ──
+  if (Array.isArray(roaRes) && roaRes.length) {
+    const roaMap = {};
+    for (const roa of roaRes) {
+      roaMap[`${roa.subnet}/${roa.prefix_length}`] = roa;
+    }
+    state.roaByASN[asn] = roaMap;
+    log(`AS${asn} ROA: ${roaRes.length} prefix(es) covered by RPKI`, 'ok');
+  }
+
   // Flat prefix list
   for (const p of rec.ipv4Prefixes)
     state.allPrefixes.push({ asn, asnName:rec.name, prefix:p.prefix, version:4, size:ipv4Size(p.prefix), desc:'—', country:rec.country });
@@ -1004,7 +1059,7 @@ async function startSearch() {
   const useRIPE  = document.getElementById('src-ripe').checked;
   if (!query && manualASNs.size === 0) return;
 
-  state = { asnRecords:[], upstreamMap:{}, allPrefixes:[], peeringData:[], historyEntries:[], errors:[] };
+  state = { asnRecords:[], upstreamMap:{}, allPrefixes:[], peeringData:[], historyEntries:[], errors:[], liveUpstreams:{}, roaByASN:{} };
   document.getElementById('results').style.display = 'none';
   document.getElementById('progress-panel').style.display = 'block';
   document.getElementById('progress-log').innerHTML = '';
@@ -1157,7 +1212,11 @@ function renderASNTable() {
         <div class="bar-num">${fmtNum(rec.ipv6Total48s)} /48s</div></div>
       </td>
       <td><span style="color:${visPct==='—'?'var(--muted)':parseInt(visPct)>80?'var(--green)':'var(--yellow)'}">${visPct}</span></td>
-      <td>${typeBadge}</td>`;
+      <td>${typeBadge}</td>
+      <td style="white-space:nowrap">
+        <a href="https://bgp.tools/as/${rec.asn}" target="_blank" style="color:var(--accent);font-size:11px;text-decoration:none;display:block">↗ BGP.tools</a>
+        <a href="https://replay.bgphelp.com/?asn=${rec.asn}" target="_blank" style="color:var(--muted);font-size:11px;text-decoration:none;display:block">↗ AskBGP</a>
+      </td>`;
     tbody.appendChild(tr);
   });
 }
@@ -1193,10 +1252,27 @@ function renderUpstreams() {
     const pdbInfo   = pdbEntry ? `<span class="pill pill-purple">${pdbEntry.net?.info_type||'Listed'}</span>` : '—';
     const downList  = u.downstream_asns.map(a=>`<span class="pill pill-muted">AS${a}</span>`).join(' ');
 
+    // AskBGP live validation
+    const liveData = state.liveUpstreams[u.asn];
+    const hasLiveData = Object.keys(state.liveUpstreams).length > 0;
+    let liveCell;
+    if (!hasLiveData) {
+      liveCell = '<span style="color:var(--muted);font-size:11px">—</span>';
+    } else if (liveData) {
+      const v4 = liveData.v4Routes ? `<span class="pill pill-green">✓ ${liveData.v4Routes} v4 routes</span>` : '';
+      const v6 = liveData.v6Routes ? `<span class="pill pill-blue">✓ ${liveData.v6Routes} v6 routes</span>` : '';
+      liveCell = [v4, v6].filter(Boolean).join('<br>') || '<span class="pill pill-green">✓ Live</span>';
+    } else {
+      liveCell = `<span style="background:rgba(255,77,109,.1);color:var(--red);padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">✗ Not seen by AskBGP</span>`;
+    }
+
     const tr = document.createElement('tr');
     tr.dataset.power = powerVal;
     tr.innerHTML = `
-      <td><span class="mono" style="color:var(--orange)">AS${u.asn}</span></td>
+      <td>
+        <span class="mono" style="color:var(--orange)">AS${u.asn}</span><br>
+        <a href="https://bgp.tools/as/${u.asn}" target="_blank" style="font-size:10px;color:var(--muted);text-decoration:none" title="View on BGP.tools">↗ bgp.tools</a>
+      </td>
       <td><strong style="color:var(--text)">${u.name||'—'}</strong></td>
       <td>${u.country||'—'}</td>
       <td data-sort="${u.downstream_asns.length}">
@@ -1212,6 +1288,7 @@ function renderUpstreams() {
         ${powerVal < 25 ? '<div style="font-size:10px;color:#e05;margin-top:2px">⚠ may be historical</div>' : ''}
       </td>
       <td data-sort="${totalV4IPs}">${pfxCell}</td>
+      <td>${liveCell}</td>
       <td>${pdbInfo}</td>`;
     tbody.appendChild(tr);
   }
@@ -1242,23 +1319,40 @@ function renderPrefixes() {
       ? `${fmtNum(p.size)} IPs`
       : `${fmtNum(p.size)} /48s`;
 
+    // RPKI/ROA status from AskBGP
+    const roaMap = state.roaByASN[p.asn] || {};
+    const hasAnyRoa = Object.keys(state.roaByASN).length > 0;
+    const roa = roaMap[p.prefix];
+    let rpkiCell;
+    if (!hasAnyRoa) {
+      rpkiCell = '<span style="color:var(--muted);font-size:11px">—</span>';
+    } else if (roa) {
+      rpkiCell = `<span class="pill pill-green" title="Max length /${roa.prefix_max_length}, TA: ${roa.ta}">✓ Valid ROA</span><br><span style="color:var(--muted);font-size:10px">max /${roa.prefix_max_length} · ${roa.ta?.toUpperCase()}</span>`;
+    } else {
+      rpkiCell = `<span style="background:rgba(255,77,109,.1);color:var(--red);padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600" title="No Route Origin Authorization found for this prefix">✗ No ROA</span>`;
+    }
+
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td></td>
       <td><span class="mono" style="color:var(--accent)">AS${p.asn}</span></td>
       <td style="color:var(--muted);font-size:12px">${p.asnName||'—'}</td>
-      <td><span class="mono" style="color:var(--text)">${p.prefix}</span></td>
+      <td>
+        <span class="mono" style="color:var(--text)">${p.prefix}</span><br>
+        <a href="https://bgp.tools/prefix/${p.prefix}" target="_blank" style="font-size:10px;color:var(--muted);text-decoration:none">↗ bgp.tools</a>
+      </td>
       <td>${verPill}</td>
       <td data-sort="${p.size}" class="mono" style="color:var(--text)">${sizeStr}</td>
       <td style="color:var(--muted);font-size:12px">${p.desc}</td>
       <td>${p.country||'—'}</td>
+      <td>${rpkiCell}</td>
     `;
     tbody.appendChild(tr);
   }
 
   if (prefs.length === 0) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td colspan="8" style="text-align:center;color:var(--muted);padding:30px">No prefix data</td>`;
+    tr.innerHTML = `<td colspan="9" style="text-align:center;color:var(--muted);padding:30px">No prefix data</td>`;
     tbody.appendChild(tr);
   }
 }
@@ -1422,7 +1516,7 @@ function clearAll() {
   document.getElementById('progress-panel').style.display = 'none';
   document.getElementById('progress-log').innerHTML = '';
   setProgress(0);
-  state = { asnRecords:[], upstreamMap:{}, allPrefixes:[], peeringData:[], historyEntries:[], errors:[] };
+  state = { asnRecords:[], upstreamMap:{}, allPrefixes:[], peeringData:[], historyEntries:[], errors:[], liveUpstreams:{}, roaByASN:{} };
   manualASNs.clear();
   renderChips();
 }
