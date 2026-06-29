@@ -493,6 +493,17 @@
 </div>
 
 <div id="results" style="display:none">
+  <!-- Error banner — shown only when fetch errors occurred -->
+  <div id="error-banner" style="display:none;margin:16px 32px 0;background:rgba(204,26,58,.1);border:1px solid rgba(204,26,58,.4);border-radius:8px;padding:14px 18px;font-size:13px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <span style="font-size:18px">⚠️</span>
+      <strong style="color:var(--red)">Incomplete data — some API calls failed</strong>
+      <button onclick="document.getElementById('error-banner').style.display='none'" style="margin-left:auto;background:none;border:none;cursor:pointer;color:var(--muted);font-size:16px">✕</button>
+    </div>
+    <div style="color:var(--muted);margin-bottom:10px">The following lookups timed out or errored. Affected ASNs may show missing prefixes, upstreams, or peering data. Rows with errors are marked <span style="color:var(--red)">⚠</span> in the tables.</div>
+    <div id="error-list" style="display:flex;flex-direction:column;gap:4px;font-family:var(--font-mono);font-size:12px"></div>
+  </div>
+
   <!-- Stats Row -->
   <div class="stats-row" id="stats-row">
     <div class="stat-card">
@@ -697,6 +708,7 @@ let state = {
   allPrefixes: [],
   peeringData: [],
   historyEntries: [],
+  errors: [],        // { asn, label, type: 'timeout'|'error', msg }
 };
 
 // ─────────────────────────────────────────────
@@ -789,11 +801,13 @@ const api = {
   ripeAsNames:    asns => fetchJ(`https://stat.ripe.net/data/as-names/data.json?resource=${asns.map(a=>'AS'+a).join(',')}&sourceapp=bgpintel`),
 };
 
-async function tryF(fn, label) {
+async function tryF(fn, label, asn=null) {
   try { return await fn(); }
   catch(e) {
-    const msg = e.name === 'AbortError' ? 'timeout' : e.message;
+    const type = e.name === 'AbortError' ? 'timeout' : 'error';
+    const msg  = type === 'timeout' ? `${FETCH_TIMEOUT_MS/1000}s timeout` : e.message;
     log(`⚠ ${label}: ${msg}`, 'err');
+    state.errors.push({ asn, label, type, msg });
     return null;
   }
 }
@@ -914,15 +928,22 @@ async function enrichASN(asnObj, useRIPE, usePDB) {
     ipv4Prefixes:[], ipv6Prefixes:[],
     ipv4Total:0, ipv6Total48s:0,
     upstreams:[], visibility:null, peeringdb:null,
+    fetchErrors: [],   // per-ASN error list for UI flags
   };
 
   // Fire all requests for this ASN in parallel
   const [announcedRes, neighboursRes, visRes, pdbRes] = await Promise.all([
-    useRIPE ? tryF(() => api.ripeAnnounced(asn),  `RIPE pfx AS${asn}`)       : null,
-    useRIPE ? tryF(() => api.ripeNeighbours(asn), `RIPE nbr AS${asn}`)       : null,
-    useRIPE ? tryF(() => api.ripeVisibility(asn), `RIPE vis AS${asn}`)       : null,
-    usePDB  ? tryF(() => api.pdbByASN(asn),       `PeeringDB AS${asn}`)      : null,
+    useRIPE ? tryF(() => api.ripeAnnounced(asn),  `RIPE prefixes`,   asn) : null,
+    useRIPE ? tryF(() => api.ripeNeighbours(asn), `RIPE neighbours`, asn) : null,
+    useRIPE ? tryF(() => api.ripeVisibility(asn), `RIPE visibility`, asn) : null,
+    usePDB  ? tryF(() => api.pdbByASN(asn),       `PeeringDB`,       asn) : null,
   ]);
+
+  // Record which calls failed for this ASN
+  if (useRIPE && !announcedRes)  rec.fetchErrors.push({ src:'RIPE', call:'Prefixes' });
+  if (useRIPE && !neighboursRes) rec.fetchErrors.push({ src:'RIPE', call:'Neighbours' });
+  if (useRIPE && !visRes)        rec.fetchErrors.push({ src:'RIPE', call:'Visibility' });
+  if (usePDB  && !pdbRes)        rec.fetchErrors.push({ src:'PDB',  call:'PeeringDB' });
 
   // ── Prefixes + history ──
   for (const p of (announcedRes?.data?.prefixes || [])) {
@@ -983,7 +1004,7 @@ async function startSearch() {
   const useRIPE  = document.getElementById('src-ripe').checked;
   if (!query && manualASNs.size === 0) return;
 
-  state = { asnRecords:[], upstreamMap:{}, allPrefixes:[], peeringData:[], historyEntries:[] };
+  state = { asnRecords:[], upstreamMap:{}, allPrefixes:[], peeringData:[], historyEntries:[], errors:[] };
   document.getElementById('results').style.display = 'none';
   document.getElementById('progress-panel').style.display = 'block';
   document.getElementById('progress-log').innerHTML = '';
@@ -1053,8 +1074,34 @@ async function startSearch() {
 //  Render
 // ─────────────────────────────────────────────
 function renderAll() {
-  renderStats(); renderASNTable(); renderUpstreams();
+  renderErrors(); renderStats(); renderASNTable(); renderUpstreams();
   renderPrefixes(); renderPeering(); renderHistory();
+}
+
+function renderErrors() {
+  const banner = document.getElementById('error-banner');
+  const list   = document.getElementById('error-list');
+  const errs   = state.errors;
+  if (!errs.length) { banner.style.display = 'none'; return; }
+
+  list.innerHTML = '';
+  // Group by ASN
+  const byASN = {};
+  for (const e of errs) {
+    const key = e.asn != null ? `AS${e.asn}` : 'Discovery';
+    (byASN[key] = byASN[key] || []).push(e);
+  }
+  for (const [asnLabel, asnErrs] of Object.entries(byASN)) {
+    const calls = asnErrs.map(e => {
+      const icon = e.type === 'timeout' ? '⏱ timeout' : '✗ error';
+      return `<span style="color:var(--red)">${icon}</span> <span style="color:var(--muted)">${e.label}</span>`;
+    }).join(' &nbsp;·&nbsp; ');
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid rgba(204,26,58,.15)';
+    row.innerHTML = `<span style="color:var(--orange);min-width:70px;font-weight:700">${asnLabel}</span>${calls}`;
+    list.appendChild(row);
+  }
+  banner.style.display = 'block';
 }
 
 function renderStats() {
@@ -1088,10 +1135,14 @@ function renderASNTable() {
     const visPct  = rec.visibility!=null ? Math.round(rec.visibility*100)+'%' : '—';
     const typeBadge = rec.infoType ? `<span class="pill pill-purple">${rec.infoType}</span>` : '—';
     const website = rec.website ? `<a href="${rec.website}" target="_blank" style="color:var(--accent);font-size:11px;display:block">${rec.website.replace(/^https?:\/\//,'').substring(0,35)}</a>` : '';
+    const errFlag = rec.fetchErrors?.length
+      ? `<span title="${rec.fetchErrors.map(e=>e.call+' failed').join(', ')}" style="color:var(--red);font-size:13px;margin-left:5px;cursor:help">⚠</span>`
+      : '';
     const tr = document.createElement('tr');
+    if (rec.fetchErrors?.length) tr.style.borderLeft = '3px solid var(--red)';
     tr.innerHTML = `
       <td style="color:var(--muted);font-weight:700">#${i+1}</td>
-      <td><span class="mono" style="color:var(--accent)">AS${rec.asn}</span></td>
+      <td><span class="mono" style="color:var(--accent)">AS${rec.asn}</span>${errFlag}</td>
       <td><strong style="color:var(--text)">${rec.name||'—'}</strong>${website}</td>
       <td>${rec.country||'—'}</td>
       <td>${rec.rir?`<span class="pill pill-muted">${rec.rir}</span>`:'—'}</td>
@@ -1371,7 +1422,7 @@ function clearAll() {
   document.getElementById('progress-panel').style.display = 'none';
   document.getElementById('progress-log').innerHTML = '';
   setProgress(0);
-  state = { asnRecords:[], upstreamMap:{}, allPrefixes:[], peeringData:[], historyEntries:[] };
+  state = { asnRecords:[], upstreamMap:{}, allPrefixes:[], peeringData:[], historyEntries:[], errors:[] };
   manualASNs.clear();
   renderChips();
 }
