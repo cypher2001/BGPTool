@@ -1,0 +1,1163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BGP Intelligence Tool</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #080d1a;
+    --surface:   #0f1624;
+    --card:      #141c2e;
+    --border:    #1e2d4a;
+    --text:      #c9d6f0;
+    --muted:     #5a7090;
+    --accent:    #00aaff;
+    --green:     #00d97e;
+    --blue:      #4488ff;
+    --orange:    #ff8c42;
+    --purple:    #a78bfa;
+    --red:       #ff4d6d;
+    --yellow:    #ffd166;
+    --font-mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 32px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .logo {
+    width: 36px; height: 36px;
+    background: linear-gradient(135deg, var(--accent), var(--blue));
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 900; font-size: 16px; color: #fff;
+    flex-shrink: 0;
+  }
+  header h1 { font-size: 18px; font-weight: 700; color: #fff; }
+  header p  { font-size: 12px; color: var(--muted); }
+
+  /* ── Search ── */
+  .search-section {
+    padding: 32px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  .search-row {
+    display: flex; gap: 12px; max-width: 800px;
+  }
+  .search-row input {
+    flex: 1;
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-size: 14px;
+    outline: none;
+    transition: border-color .2s;
+  }
+  .search-row input:focus { border-color: var(--accent); }
+  .search-row input::placeholder { color: var(--muted); }
+  .btn {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 10px 24px;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .2s;
+    white-space: nowrap;
+  }
+  .btn:hover { opacity: .85; }
+  .btn:disabled { opacity: .4; cursor: default; }
+  .btn-ghost {
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+  .source-toggles {
+    display: flex; gap: 16px; margin-top: 14px; flex-wrap: wrap;
+  }
+  .source-toggle label {
+    display: flex; align-items: center; gap: 6px;
+    cursor: pointer; font-size: 12px; color: var(--muted);
+    user-select: none;
+  }
+  .source-toggle input[type=checkbox] { accent-color: var(--accent); }
+  .source-toggle label:hover { color: var(--text); }
+
+  /* ── Progress ── */
+  #progress-panel {
+    margin: 24px 32px 0;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    display: none;
+  }
+  .progress-header { font-weight: 600; margin-bottom: 12px; color: #fff; }
+  .progress-log {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--muted);
+    max-height: 120px;
+    overflow-y: auto;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .progress-log .ok  { color: var(--green); }
+  .progress-log .err { color: var(--red); }
+  .progress-log .inf { color: var(--accent); }
+  .progress-bar-wrap {
+    background: var(--surface);
+    border-radius: 4px;
+    height: 4px;
+    margin-bottom: 12px;
+    overflow: hidden;
+  }
+  .progress-bar {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--green));
+    border-radius: 4px;
+    transition: width .3s;
+    width: 0%;
+  }
+
+  /* ── Summary stats ── */
+  .stats-row {
+    display: flex; gap: 16px; padding: 24px 32px 0; flex-wrap: wrap;
+  }
+  .stat-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+    flex: 1; min-width: 160px;
+  }
+  .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .stat-value { font-size: 28px; font-weight: 700; color: #fff; margin-top: 4px; font-family: var(--font-mono); }
+  .stat-sub   { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* ── Tabs ── */
+  .tabs-wrap { padding: 24px 32px 0; }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); }
+  .tab {
+    padding: 8px 18px;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+    border: 1px solid transparent;
+    border-bottom: none;
+    transition: all .15s;
+    background: none;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active {
+    color: #fff;
+    background: var(--card);
+    border-color: var(--border);
+    border-bottom-color: var(--card);
+    margin-bottom: -1px;
+  }
+  .tab-badge {
+    background: var(--border);
+    color: var(--muted);
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    margin-left: 6px;
+  }
+  .tab.active .tab-badge { background: var(--accent); color: #fff; }
+
+  .tab-panels { padding: 0 32px 32px; }
+  .tab-panel { display: none; padding-top: 20px; }
+  .tab-panel.active { display: block; }
+
+  /* ── Tables ── */
+  .table-wrap {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: auto;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  thead th {
+    background: var(--surface);
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+  }
+  thead th:hover { color: var(--text); }
+  thead th .sort-icon { margin-left: 4px; opacity: .4; }
+  thead th.sorted-asc .sort-icon::after { content: ' ▲'; opacity: 1; }
+  thead th.sorted-desc .sort-icon::after { content: ' ▼'; opacity: 1; }
+  tbody tr { border-bottom: 1px solid var(--border); transition: background .1s; }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: rgba(255,255,255,.03); }
+  tbody td { padding: 10px 14px; vertical-align: middle; }
+
+  .mono { font-family: var(--font-mono); }
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--font-mono);
+  }
+  .pill-green  { background: rgba(0,217,126,.12); color: var(--green); }
+  .pill-blue   { background: rgba(68,136,255,.12); color: var(--blue); }
+  .pill-orange { background: rgba(255,140,66,.12); color: var(--orange); }
+  .pill-purple { background: rgba(167,139,250,.12); color: var(--purple); }
+  .pill-muted  { background: rgba(90,112,144,.12); color: var(--muted); }
+  .pill-yellow { background: rgba(255,209,102,.12); color: var(--yellow); }
+
+  /* Bar chart inline */
+  .bar-wrap { display: flex; align-items: center; gap: 8px; }
+  .bar-track { flex: 1; height: 6px; background: var(--border); border-radius: 3px; min-width: 80px; }
+  .bar-fill  { height: 100%; border-radius: 3px; transition: width .4s; }
+  .bar-v4    { background: var(--green); }
+  .bar-v6    { background: var(--blue); }
+  .bar-num   { font-family: var(--font-mono); font-size: 12px; color: var(--text); min-width: 80px; text-align: right; }
+
+  /* ── Expandable rows ── */
+  .expand-btn {
+    background: none; border: none; cursor: pointer;
+    color: var(--accent); font-size: 12px; padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .expand-btn:hover { background: rgba(0,170,255,.1); }
+  .sub-row td {
+    background: rgba(0,0,0,.2);
+    padding: 0;
+  }
+  .sub-content {
+    padding: 12px 20px;
+    font-size: 12px;
+    display: flex; flex-wrap: wrap; gap: 8px;
+  }
+  .prefix-chip {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text);
+  }
+
+  /* ── Peering cards ── */
+  .peer-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+  }
+  .peer-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .peer-card-header {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    margin-bottom: 12px;
+  }
+  .peer-card h3 { font-size: 14px; font-weight: 600; color: #fff; }
+  .peer-card .asn-badge {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--accent);
+    background: rgba(0,170,255,.1);
+    padding: 2px 8px; border-radius: 4px;
+  }
+  .peer-card .kv { margin-top: 6px; }
+  .peer-card .kv span { color: var(--muted); font-size: 11px; }
+  .peer-card .kv strong { color: var(--text); font-size: 12px; }
+
+  /* ── History timeline ── */
+  .history-wrap {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+  }
+  .history-filter {
+    display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap;
+  }
+  .history-entry {
+    display: flex; gap: 12px; align-items: flex-start;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .history-entry:last-child { border-bottom: none; }
+  .h-time { color: var(--muted); min-width: 140px; font-family: var(--font-mono); }
+  .h-asn  { color: var(--accent); min-width: 80px; font-family: var(--font-mono); }
+  .h-type { min-width: 80px; }
+  .h-prefix { color: var(--text); font-family: var(--font-mono); }
+  .announced { color: var(--green); }
+  .withdrawn { color: var(--red); }
+
+  /* ── Empty / error states ── */
+  .empty {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--muted);
+  }
+  .empty .icon { font-size: 40px; margin-bottom: 12px; }
+  .empty h3 { color: var(--text); margin-bottom: 8px; }
+
+  /* ── Section headers ── */
+  .section-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--muted);
+    margin-bottom: 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* ── Tooltips ── */
+  [title] { cursor: help; }
+
+  /* ── IXP table ── */
+  .ixp-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    margin: 2px;
+    background: rgba(167,139,250,.1);
+    color: var(--purple);
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--surface); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+  @media (max-width: 640px) {
+    .search-section, .stats-row, .tabs-wrap, .tab-panels { padding-left: 16px; padding-right: 16px; }
+    .stats-row { gap: 10px; }
+    .stat-card { min-width: 130px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">BGP</div>
+  <div>
+    <h1>BGP Intelligence Tool</h1>
+    <p>ASN discovery · Prefix analysis · Upstream partners · Peering data · Routing history</p>
+  </div>
+</header>
+
+<div class="search-section">
+  <div class="search-row">
+    <input type="text" id="company-input" placeholder="Enter company name (e.g. Comcast, AT&T, Cloudflare…)" />
+    <button class="btn" id="search-btn" onclick="startSearch()">Search</button>
+    <button class="btn btn-ghost" onclick="clearAll()">Clear</button>
+  </div>
+  <div class="source-toggles">
+    <div class="source-toggle"><label><input type="checkbox" id="src-bgpview" checked> BGPView API</label></div>
+    <div class="source-toggle"><label><input type="checkbox" id="src-ripe" checked> RIPE STAT</label></div>
+    <div class="source-toggle"><label><input type="checkbox" id="src-peeringdb" checked> PeeringDB</label></div>
+  </div>
+</div>
+
+<div id="progress-panel">
+  <div class="progress-header">Loading BGP data…</div>
+  <div class="progress-bar-wrap"><div class="progress-bar" id="progress-bar"></div></div>
+  <div class="progress-log" id="progress-log"></div>
+</div>
+
+<div id="results" style="display:none">
+  <!-- Stats Row -->
+  <div class="stats-row" id="stats-row">
+    <div class="stat-card">
+      <div class="stat-label">ASNs Found</div>
+      <div class="stat-value" id="stat-asns">0</div>
+      <div class="stat-sub" id="stat-rirs">across RIRs</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Total IPv4 Space</div>
+      <div class="stat-value" id="stat-v4">0</div>
+      <div class="stat-sub" id="stat-v4-pfx">prefixes</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Total IPv6 Prefixes</div>
+      <div class="stat-value" id="stat-v6">0</div>
+      <div class="stat-sub" id="stat-v6-pfx">announced routes</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Upstream Partners</div>
+      <div class="stat-value" id="stat-ups">0</div>
+      <div class="stat-sub">unique upstream ASNs</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">IXP Presence</div>
+      <div class="stat-value" id="stat-ixp">—</div>
+      <div class="stat-sub">exchange points</div>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs-wrap">
+    <div class="tabs">
+      <button class="tab active" onclick="showTab('asn-rankings')">ASN Rankings <span class="tab-badge" id="badge-asn">0</span></button>
+      <button class="tab" onclick="showTab('upstreams')">Upstream Partners <span class="tab-badge" id="badge-ups">0</span></button>
+      <button class="tab" onclick="showTab('prefixes')">Prefix Details <span class="tab-badge" id="badge-pfx">0</span></button>
+      <button class="tab" onclick="showTab('peering')">Peering / IXP <span class="tab-badge" id="badge-peer">0</span></button>
+      <button class="tab" onclick="showTab('history')">Routing History <span class="tab-badge" id="badge-hist">0</span></button>
+    </div>
+  </div>
+
+  <div class="tab-panels">
+    <!-- Tab 1: ASN Rankings -->
+    <div class="tab-panel active" id="panel-asn-rankings">
+      <p class="section-title">ASNs ranked by total IP advertisement size</p>
+      <div class="table-wrap">
+        <table id="asn-table">
+          <thead>
+            <tr>
+              <th onclick="sortTable('asn-table',0)">Rank</th>
+              <th onclick="sortTable('asn-table',1)">ASN <span class="sort-icon"></span></th>
+              <th onclick="sortTable('asn-table',2)">Network Name <span class="sort-icon"></span></th>
+              <th onclick="sortTable('asn-table',3)">Country <span class="sort-icon"></span></th>
+              <th onclick="sortTable('asn-table',4)">RIR <span class="sort-icon"></span></th>
+              <th onclick="sortTable('asn-table',5)" title="Total IPv4 IPs advertised"># IPv4 Pfx <span class="sort-icon"></span></th>
+              <th style="min-width:180px">IPv4 Space</th>
+              <th onclick="sortTable('asn-table',7)" title="IPv6 prefixes advertised"># IPv6 Pfx <span class="sort-icon"></span></th>
+              <th style="min-width:180px">IPv6 Space</th>
+              <th>Visibility</th>
+              <th>Type</th>
+            </tr>
+          </thead>
+          <tbody id="asn-table-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Tab 2: Upstreams -->
+    <div class="tab-panel" id="panel-upstreams">
+      <p class="section-title">Upstream providers (transit providers) sorted by number of downstream ASNs</p>
+      <div class="table-wrap">
+        <table id="ups-table">
+          <thead>
+            <tr>
+              <th onclick="sortTable('ups-table',0)">Upstream ASN <span class="sort-icon"></span></th>
+              <th onclick="sortTable('ups-table',1)">Company Name <span class="sort-icon"></span></th>
+              <th onclick="sortTable('ups-table',2)">Country <span class="sort-icon"></span></th>
+              <th onclick="sortTable('ups-table',3)"># Downstream ASNs <span class="sort-icon"></span></th>
+              <th>IP Version(s)</th>
+              <th>PeeringDB Info</th>
+            </tr>
+          </thead>
+          <tbody id="ups-table-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Tab 3: Prefix Details -->
+    <div class="tab-panel" id="panel-prefixes">
+      <p class="section-title">All advertised prefixes — IPv4 and IPv6 — grouped by ASN</p>
+      <div class="table-wrap">
+        <table id="pfx-table">
+          <thead>
+            <tr>
+              <th>Expand</th>
+              <th onclick="sortTable('pfx-table',1)">ASN <span class="sort-icon"></span></th>
+              <th onclick="sortTable('pfx-table',2)">Network Name <span class="sort-icon"></span></th>
+              <th onclick="sortTable('pfx-table',3)">Prefix <span class="sort-icon"></span></th>
+              <th>Version</th>
+              <th onclick="sortTable('pfx-table',5)">Size (IPs / /48s) <span class="sort-icon"></span></th>
+              <th>Description</th>
+              <th>Country</th>
+            </tr>
+          </thead>
+          <tbody id="pfx-table-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Tab 4: Peering -->
+    <div class="tab-panel" id="panel-peering">
+      <p class="section-title">PeeringDB data — IXP presence, facilities, bandwidth, and peering policy</p>
+      <div id="peering-content">
+        <div class="empty"><div class="icon">🔄</div><h3>Loading peering data…</h3></div>
+      </div>
+    </div>
+
+    <!-- Tab 5: History -->
+    <div class="tab-panel" id="panel-history">
+      <p class="section-title">Routing history — prefix announcements and withdrawals from RIPE STAT</p>
+      <div class="history-filter" id="history-filter"></div>
+      <div class="history-wrap">
+        <div id="history-content">
+          <div class="empty"><div class="icon">🕐</div><h3>Loading routing history…</h3></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────
+//  State
+// ─────────────────────────────────────────────
+let state = {
+  asnRecords: [],      // enriched ASN objects
+  upstreamMap: {},     // asn -> {name, country, downstream_asns, versions}
+  allPrefixes: [],     // flat list of {asn, name, prefix, version, size, desc, country}
+  peeringData: [],     // peeringdb net objects
+  historyEntries: [],  // {time, asn, type, prefix}
+  totalProgress: 0,
+  maxProgress: 100,
+};
+
+// ─────────────────────────────────────────────
+//  Utilities
+// ─────────────────────────────────────────────
+function ipv4Size(prefix) {
+  const len = parseInt(prefix.split('/')[1]);
+  return Math.pow(2, 32 - len);
+}
+function ipv6In48s(prefix) {
+  const len = parseInt(prefix.split('/')[1]);
+  return len <= 48 ? Math.pow(2, 48 - len) : Math.pow(2, Math.max(0, 48 - len));
+}
+function fmtNum(n) {
+  if (n >= 1e9) return (n/1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n/1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+  return String(n);
+}
+function fmtDate(ts) {
+  if (!ts) return '—';
+  try { return new Date(ts).toLocaleDateString('en-US', {year:'numeric',month:'short',day:'numeric'}); }
+  catch { return ts; }
+}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ─────────────────────────────────────────────
+//  Progress
+// ─────────────────────────────────────────────
+function log(msg, cls='') {
+  const el = document.getElementById('progress-log');
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = '› ' + msg;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+function setProgress(pct) {
+  document.getElementById('progress-bar').style.width = pct + '%';
+}
+
+// ─────────────────────────────────────────────
+//  API calls (with error handling)
+// ─────────────────────────────────────────────
+async function bgpviewSearch(query) {
+  const r = await fetch(`https://api.bgpview.io/search?query=${encodeURIComponent(query)}`);
+  return r.json();
+}
+async function bgpviewASN(asn) {
+  const r = await fetch(`https://api.bgpview.io/asn/${asn}`);
+  return r.json();
+}
+async function bgpviewPrefixes(asn) {
+  const r = await fetch(`https://api.bgpview.io/asn/${asn}/prefixes`);
+  return r.json();
+}
+async function bgpviewUpstreams(asn) {
+  const r = await fetch(`https://api.bgpview.io/asn/${asn}/upstreams`);
+  return r.json();
+}
+async function ripeVisibility(asn) {
+  const r = await fetch(`https://stat.ripe.net/data/visibility/data.json?resource=AS${asn}&sourceapp=bgpintel`);
+  return r.json();
+}
+async function ripeHistory(asn) {
+  // announced-prefixes includes timelines (starttime/endtime) per prefix — more reliable
+  const r = await fetch(`https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS${asn}&sourceapp=bgpintel`);
+  return r.json();
+}
+async function ripeNeighbours(asn) {
+  const r = await fetch(`https://stat.ripe.net/data/asn-neighbours/data.json?resource=AS${asn}&sourceapp=bgpintel`);
+  return r.json();
+}
+async function peeringdbByASN(asn) {
+  const r = await fetch(`https://www.peeringdb.com/api/net?asn=${asn}&depth=2`);
+  return r.json();
+}
+
+// safe wrapper
+async function tryFetch(fn, label) {
+  try {
+    const d = await fn();
+    return d;
+  } catch(e) {
+    log(`⚠ ${label}: ${e.message}`, 'err');
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────
+//  Main search flow
+// ─────────────────────────────────────────────
+async function startSearch() {
+  const query = document.getElementById('company-input').value.trim();
+  if (!query) return;
+
+  const useBGPView  = document.getElementById('src-bgpview').checked;
+  const useRIPE     = document.getElementById('src-ripe').checked;
+  const usePeeringDB = document.getElementById('src-peeringdb').checked;
+
+  // Reset
+  state = { asnRecords:[], upstreamMap:{}, allPrefixes:[], peeringData:[], historyEntries:[] };
+  document.getElementById('results').style.display = 'none';
+  document.getElementById('progress-panel').style.display = 'block';
+  document.getElementById('progress-log').innerHTML = '';
+  document.getElementById('search-btn').disabled = true;
+  setProgress(5);
+
+  log(`Searching for: "${query}"`, 'inf');
+
+  // ── Step 1: Discover ASNs ──
+  let asns = [];
+
+  if (useBGPView) {
+    log('BGPView: searching ASNs…');
+    const searchRes = await tryFetch(() => bgpviewSearch(query), 'BGPView search');
+    if (searchRes?.data?.asns) {
+      for (const a of searchRes.data.asns) {
+        asns.push({ asn: a.asn, name: a.name, description: a.description, country: a.country_code, source: 'BGPView' });
+      }
+      log(`BGPView: found ${searchRes.data.asns.length} ASN(s)`, 'ok');
+    }
+  }
+
+  if (asns.length === 0) {
+    log('No ASNs found. Try a different company name.', 'err');
+    document.getElementById('search-btn').disabled = false;
+    return;
+  }
+
+  setProgress(15);
+
+  // Deduplicate
+  const seen = new Set();
+  asns = asns.filter(a => { if (seen.has(a.asn)) return false; seen.add(a.asn); return true; });
+  log(`Total unique ASNs: ${asns.length}`, 'inf');
+
+  // ── Step 2: Enrich each ASN ──
+  const step = 60 / asns.length;
+  let prog = 15;
+
+  for (const asnObj of asns) {
+    const asn = asnObj.asn;
+    log(`Fetching data for AS${asn} (${asnObj.name || asnObj.description || '—'})…`);
+
+    const rec = {
+      ...asnObj,
+      ipv4Prefixes: [],
+      ipv6Prefixes: [],
+      ipv4Total: 0,
+      ipv6Total48s: 0,
+      upstreams: [],
+      visibility: null,
+      peeringdb: null,
+      history: [],
+      website: '',
+      infoType: '',
+      rir: '',
+    };
+
+    if (useBGPView) {
+      // Detail
+      const detail = await tryFetch(() => bgpviewASN(asn), `BGPView AS${asn}`);
+      if (detail?.data) {
+        rec.name        = detail.data.name || rec.name;
+        rec.description = detail.data.description_short || rec.description;
+        rec.website     = detail.data.website || '';
+        rec.rir         = detail.data.rir_allocation?.rir_name || '';
+        rec.country     = detail.data.country_code || rec.country;
+      }
+      await sleep(200);
+
+      // Prefixes
+      const pfxRes = await tryFetch(() => bgpviewPrefixes(asn), `BGPView AS${asn} prefixes`);
+      if (pfxRes?.data) {
+        rec.ipv4Prefixes = (pfxRes.data.ipv4_prefixes || []).map(p => ({
+          prefix: p.prefix, name: p.name, description: p.description, country: p.country_code
+        }));
+        rec.ipv6Prefixes = (pfxRes.data.ipv6_prefixes || []).map(p => ({
+          prefix: p.prefix, name: p.name, description: p.description, country: p.country_code
+        }));
+        rec.ipv4Total   = rec.ipv4Prefixes.reduce((s,p) => s + ipv4Size(p.prefix), 0);
+        rec.ipv6Total48s = rec.ipv6Prefixes.reduce((s,p) => s + ipv6In48s(p.prefix), 0);
+      }
+      await sleep(200);
+
+      // Upstreams
+      const upsRes = await tryFetch(() => bgpviewUpstreams(asn), `BGPView AS${asn} upstreams`);
+      if (upsRes?.data) {
+        const v4ups = (upsRes.data.ipv4_upstreams || []).map(u => ({ ...u, version: 4 }));
+        const v6ups = (upsRes.data.ipv6_upstreams || []).map(u => ({ ...u, version: 6 }));
+        rec.upstreams = [...v4ups, ...v6ups];
+
+        for (const u of rec.upstreams) {
+          if (!state.upstreamMap[u.asn]) {
+            state.upstreamMap[u.asn] = {
+              asn: u.asn, name: u.name || u.description, country: u.country_code || '—',
+              downstream_asns: new Set(), versions: new Set(), peeringdb: null
+            };
+          }
+          state.upstreamMap[u.asn].downstream_asns.add(asn);
+          state.upstreamMap[u.asn].versions.add(u.version);
+        }
+      }
+      await sleep(250);
+    }
+
+    // RIPE STAT visibility
+    if (useRIPE) {
+      const visRes = await tryFetch(() => ripeVisibility(asn), `RIPE visibility AS${asn}`);
+      if (visRes?.data?.visibility) {
+        rec.visibility = visRes.data.visibility.v4?.ratio_of_total_visibility_24h
+                      ?? visRes.data.visibility.v6?.ratio_of_total_visibility_24h
+                      ?? null;
+      }
+      await sleep(200);
+
+      // History via announced-prefixes (includes per-prefix timelines)
+      const histRes = await tryFetch(() => ripeHistory(asn), `RIPE history AS${asn}`);
+      const pfxList = histRes?.data?.prefixes || [];
+      for (const p of pfxList) {
+        const pfx = p.prefix;
+        for (const tl of (p.timelines || [])) {
+          if (tl.starttime) {
+            state.historyEntries.push({ time: tl.starttime, asn, asnName: rec.name, type: 'A', prefix: pfx });
+          }
+          if (tl.endtime) {
+            state.historyEntries.push({ time: tl.endtime, asn, asnName: rec.name, type: 'W', prefix: pfx });
+          }
+        }
+        // No timelines = currently active with no withdraw event
+        if (!p.timelines?.length) {
+          state.historyEntries.push({ time: p.first_seen || '', asn, asnName: rec.name, type: 'A', prefix: pfx });
+        }
+      }
+      await sleep(200);
+    }
+
+    // PeeringDB
+    if (usePeeringDB) {
+      const pdbRes = await tryFetch(() => peeringdbByASN(asn), `PeeringDB AS${asn}`);
+      if (pdbRes?.data?.length) {
+        const net = pdbRes.data[0];
+        rec.peeringdb = net;
+        rec.infoType  = net.info_type || '';
+        state.peeringData.push({ asn, name: rec.name, net });
+      }
+      await sleep(150);
+    }
+
+    state.asnRecords.push(rec);
+
+    // Add to flat prefix list
+    for (const p of rec.ipv4Prefixes) {
+      state.allPrefixes.push({ asn, asnName: rec.name, prefix: p.prefix, version: 4,
+        size: ipv4Size(p.prefix), desc: p.description || p.name || '—', country: p.country || rec.country });
+    }
+    for (const p of rec.ipv6Prefixes) {
+      state.allPrefixes.push({ asn, asnName: rec.name, prefix: p.prefix, version: 6,
+        size: ipv6In48s(p.prefix), desc: p.description || p.name || '—', country: p.country || rec.country });
+    }
+
+    log(`AS${asn}: ${rec.ipv4Prefixes.length} v4 pfx, ${rec.ipv6Prefixes.length} v6 pfx, ${rec.upstreams.length} upstreams`, 'ok');
+    prog += step;
+    setProgress(Math.min(prog, 85));
+  }
+
+  // Sort ASN records by IPv4 total (desc)
+  state.asnRecords.sort((a,b) => (b.ipv4Total + b.ipv6Total48s) - (a.ipv4Total + a.ipv6Total48s));
+
+  setProgress(90);
+  log('Rendering results…', 'inf');
+  renderAll();
+  setProgress(100);
+  log('Done.', 'ok');
+
+  document.getElementById('results').style.display = 'block';
+  document.getElementById('search-btn').disabled = false;
+  setTimeout(() => { document.getElementById('progress-panel').style.display = 'none'; }, 3000);
+}
+
+// ─────────────────────────────────────────────
+//  Render functions
+// ─────────────────────────────────────────────
+function renderAll() {
+  renderStats();
+  renderASNTable();
+  renderUpstreams();
+  renderPrefixes();
+  renderPeering();
+  renderHistory();
+}
+
+function renderStats() {
+  const recs = state.asnRecords;
+  const totalV4IPs = recs.reduce((s,r) => s + r.ipv4Total, 0);
+  const totalV6pfx = recs.reduce((s,r) => s + r.ipv6Prefixes.length, 0);
+  const totalV4pfx = recs.reduce((s,r) => s + r.ipv4Prefixes.length, 0);
+  const upCount    = Object.keys(state.upstreamMap).length;
+  const ixpCount   = state.peeringData.reduce((s,d) => s + (d.net?.netixlan_set?.length || 0), 0);
+  const rirs       = [...new Set(recs.map(r => r.rir).filter(Boolean))].join(', ') || 'Multiple';
+
+  document.getElementById('stat-asns').textContent  = recs.length;
+  document.getElementById('stat-rirs').textContent  = rirs;
+  document.getElementById('stat-v4').textContent    = fmtNum(totalV4IPs);
+  document.getElementById('stat-v4-pfx').textContent = `${totalV4pfx} prefixes`;
+  document.getElementById('stat-v6').textContent    = totalV6pfx;
+  document.getElementById('stat-v6-pfx').textContent = 'announced routes';
+  document.getElementById('stat-ups').textContent   = upCount;
+  document.getElementById('stat-ixp').textContent   = ixpCount || '—';
+
+  document.getElementById('badge-asn').textContent  = recs.length;
+  document.getElementById('badge-ups').textContent  = upCount;
+  document.getElementById('badge-pfx').textContent  = state.allPrefixes.length;
+  document.getElementById('badge-peer').textContent = state.peeringData.length;
+  document.getElementById('badge-hist').textContent = state.historyEntries.length;
+}
+
+function renderASNTable() {
+  const recs = state.asnRecords;
+  const maxV4 = Math.max(...recs.map(r => r.ipv4Total), 1);
+  const maxV6 = Math.max(...recs.map(r => r.ipv6Total48s), 1);
+
+  const tbody = document.getElementById('asn-table-body');
+  tbody.innerHTML = '';
+
+  recs.forEach((rec, i) => {
+    const v4pct = Math.round((rec.ipv4Total / maxV4) * 100);
+    const v6pct = Math.round((rec.ipv6Total48s / maxV6) * 100);
+    const visPct = rec.visibility != null ? Math.round(rec.visibility * 100) + '%' : '—';
+    const rirBadge = rec.rir ? `<span class="pill pill-muted">${rec.rir}</span>` : '—';
+    const typeBadge = rec.infoType ? `<span class="pill pill-purple">${rec.infoType}</span>` : '—';
+    const nameDisplay = rec.name || rec.description || '—';
+    const website = rec.website ? `<a href="${rec.website}" target="_blank" style="color:var(--accent);font-size:11px;display:block">${rec.website.replace(/^https?:\/\//,'')}</a>` : '';
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td style="color:var(--muted);font-weight:700">#${i+1}</td>
+      <td><span class="mono" style="color:var(--accent)">AS${rec.asn}</span></td>
+      <td><strong style="color:#fff">${nameDisplay}</strong>${website}</td>
+      <td>${rec.country || '—'}</td>
+      <td>${rirBadge}</td>
+      <td data-sort="${rec.ipv4Prefixes.length}"><span class="pill pill-green">${rec.ipv4Prefixes.length}</span></td>
+      <td data-sort="${rec.ipv4Total}">
+        <div class="bar-wrap">
+          <div class="bar-track"><div class="bar-fill bar-v4" style="width:${v4pct}%"></div></div>
+          <div class="bar-num">${fmtNum(rec.ipv4Total)} IPs</div>
+        </div>
+      </td>
+      <td data-sort="${rec.ipv6Prefixes.length}"><span class="pill pill-blue">${rec.ipv6Prefixes.length}</span></td>
+      <td data-sort="${rec.ipv6Total48s}">
+        <div class="bar-wrap">
+          <div class="bar-track"><div class="bar-fill bar-v6" style="width:${v6pct}%"></div></div>
+          <div class="bar-num">${fmtNum(rec.ipv6Total48s)} /48s</div>
+        </div>
+      </td>
+      <td><span style="color:${visPct==='—'?'var(--muted)':parseInt(visPct)>80?'var(--green)':'var(--yellow)'}">${visPct}</span></td>
+      <td>${typeBadge}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function renderUpstreams() {
+  const ups = Object.values(state.upstreamMap)
+    .map(u => ({ ...u, downstream_asns: [...u.downstream_asns], versions: [...u.versions] }))
+    .sort((a,b) => b.downstream_asns.length - a.downstream_asns.length);
+
+  const tbody = document.getElementById('ups-table-body');
+  tbody.innerHTML = '';
+
+  for (const u of ups) {
+    const verBadges = u.versions.map(v =>
+      `<span class="pill ${v===4?'pill-green':'pill-blue'}">IPv${v}</span>`
+    ).join(' ');
+
+    // Look up peeringdb info for upstream ASN
+    const pdbEntry = state.peeringData.find(p => p.asn === u.asn);
+    const pdbInfo = pdbEntry
+      ? `<span class="pill pill-purple">${pdbEntry.net?.info_type||'Listed'}</span> ${pdbEntry.net?.info_traffic?`<span style="color:var(--muted);font-size:11px">${pdbEntry.net.info_traffic}</span>`:''}`
+      : '<span style="color:var(--muted);font-size:11px">—</span>';
+
+    const downstreamList = u.downstream_asns.map(a => `<span class="pill pill-muted">AS${a}</span>`).join(' ');
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><span class="mono" style="color:var(--orange)">AS${u.asn}</span></td>
+      <td><strong style="color:#fff">${u.name || '—'}</strong></td>
+      <td>${u.country || '—'}</td>
+      <td data-sort="${u.downstream_asns.length}">
+        <span class="pill pill-orange">${u.downstream_asns.length}</span>
+        <div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:3px">${downstreamList}</div>
+      </td>
+      <td>${verBadges}</td>
+      <td>${pdbInfo}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+
+  if (ups.length === 0) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="6" style="text-align:center;color:var(--muted);padding:30px">No upstream data found</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function renderPrefixes() {
+  const prefs = [...state.allPrefixes].sort((a,b) => b.size - a.size);
+  const tbody = document.getElementById('pfx-table-body');
+  tbody.innerHTML = '';
+
+  for (const p of prefs) {
+    const verPill = p.version === 4
+      ? `<span class="pill pill-green">IPv4</span>`
+      : `<span class="pill pill-blue">IPv6</span>`;
+    const sizeStr = p.version === 4
+      ? `${fmtNum(p.size)} IPs`
+      : `${fmtNum(p.size)} /48s`;
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td></td>
+      <td><span class="mono" style="color:var(--accent)">AS${p.asn}</span></td>
+      <td style="color:var(--muted);font-size:12px">${p.asnName||'—'}</td>
+      <td><span class="mono" style="color:#fff">${p.prefix}</span></td>
+      <td>${verPill}</td>
+      <td data-sort="${p.size}" class="mono" style="color:var(--text)">${sizeStr}</td>
+      <td style="color:var(--muted);font-size:12px">${p.desc}</td>
+      <td>${p.country||'—'}</td>
+    `;
+    tbody.appendChild(tr);
+  }
+
+  if (prefs.length === 0) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td colspan="8" style="text-align:center;color:var(--muted);padding:30px">No prefix data</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function renderPeering() {
+  const container = document.getElementById('peering-content');
+
+  if (state.peeringData.length === 0) {
+    container.innerHTML = `<div class="empty"><div class="icon">📡</div><h3>No PeeringDB data found</h3><p>These ASNs may not be listed on PeeringDB, or PeeringDB source was disabled.</p></div>`;
+    return;
+  }
+
+  let html = '';
+
+  for (const entry of state.peeringData) {
+    const net = entry.net;
+    const ixlans = net.netixlan_set || [];
+    const facs   = net.netfac_set || [];
+
+    const ixpHtml = ixlans.length
+      ? ixlans.map(ix => `<span class="ixp-pill">${ix.name || ix.ixlan_id} (${ix.speed ? ix.speed/1000+'G':'?'})</span>`).join('')
+      : '<span style="color:var(--muted);font-size:12px">No IXP data</span>';
+
+    const facHtml = facs.length
+      ? facs.slice(0,6).map(f => `<span class="pill pill-muted">${f.name||f.fac_id}</span>`).join(' ')
+      : '<span style="color:var(--muted);font-size:12px">No facility data</span>';
+
+    html += `
+      <div class="peer-card" style="margin-bottom:16px">
+        <div class="peer-card-header">
+          <div>
+            <h3>${net.name || entry.name}</h3>
+            ${net.aka ? `<div style="color:var(--muted);font-size:11px">${net.aka}</div>` : ''}
+          </div>
+          <span class="asn-badge">AS${entry.asn}</span>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px">
+          <div class="kv"><span>Type</span><br><strong>${net.info_type||'—'}</strong></div>
+          <div class="kv"><span>Traffic</span><br><strong>${net.info_traffic||'—'}</strong></div>
+          <div class="kv"><span>Policy</span><br><strong>${net.policy_general||'—'}</strong></div>
+          <div class="kv"><span>IPv4 Prefixes</span><br><strong class="mono">${net.info_prefixes4??'—'}</strong></div>
+          <div class="kv"><span>IPv6 Prefixes</span><br><strong class="mono">${net.info_prefixes6??'—'}</strong></div>
+          <div class="kv"><span>Website</span><br><strong>${net.website?`<a href="${net.website}" target="_blank" style="color:var(--accent)">${net.website.replace(/^https?:\/\//,'').substring(0,30)}</a>`:'—'}</strong></div>
+        </div>
+
+        <div style="margin-bottom:12px">
+          <div class="section-title" style="font-size:11px;margin-bottom:8px">IXP Presence (${ixlans.length} exchanges)</div>
+          <div>${ixpHtml}</div>
+        </div>
+
+        <div>
+          <div class="section-title" style="font-size:11px;margin-bottom:8px">Facilities (${facs.length})</div>
+          <div>${facHtml}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  container.innerHTML = html;
+}
+
+function renderHistory() {
+  const entries = [...state.historyEntries]
+    .filter(e => e.time && e.prefix)
+    .sort((a,b) => new Date(b.time) - new Date(a.time))
+    .slice(0, 200);
+
+  // Build ASN filter buttons
+  const asnSet = [...new Set(entries.map(e => e.asn))];
+  const filterDiv = document.getElementById('history-filter');
+  filterDiv.innerHTML = '<span style="color:var(--muted);font-size:12px;line-height:28px">Filter: </span>' +
+    asnSet.map(asn => `<button class="btn btn-ghost" style="padding:4px 12px;font-size:11px" onclick="filterHistory(${asn})" id="hf-${asn}">AS${asn}</button>`).join('') +
+    `<button class="btn btn-ghost" style="padding:4px 12px;font-size:11px" onclick="filterHistory(null)">All</button>`;
+
+  window._historyEntries = entries;
+  window._historyFilter = null;
+  renderHistoryList(entries);
+}
+
+function filterHistory(asn) {
+  const entries = asn ? window._historyEntries.filter(e => e.asn === asn) : window._historyEntries;
+  renderHistoryList(entries);
+}
+
+function renderHistoryList(entries) {
+  const container = document.getElementById('history-content');
+
+  if (entries.length === 0) {
+    container.innerHTML = `<div class="empty"><div class="icon">📭</div><h3>No routing history data</h3><p>RIPE STAT may not have history for these ASNs, or the RIPE source was disabled.</p></div>`;
+    return;
+  }
+
+  let html = '';
+  for (const e of entries) {
+    const isAnnounce = e.type === 'A' || e.type === 'announce';
+    const typeCls  = isAnnounce ? 'announced' : 'withdrawn';
+    const typeLabel = isAnnounce ? '▲ Announced' : '▼ Withdrawn';
+    html += `
+      <div class="history-entry">
+        <div class="h-time">${fmtDate(e.time)}</div>
+        <div class="h-asn">AS${e.asn}</div>
+        <div class="h-type"><span class="${typeCls}">${typeLabel}</span></div>
+        <div class="h-prefix">${e.prefix}</div>
+      </div>
+    `;
+  }
+
+  container.innerHTML = html;
+}
+
+// ─────────────────────────────────────────────
+//  Tab switching
+// ─────────────────────────────────────────────
+function showTab(id) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + id).classList.add('active');
+  // Highlight clicked tab button
+  event.currentTarget.classList.add('active');
+}
+
+// ─────────────────────────────────────────────
+//  Table sorting
+// ─────────────────────────────────────────────
+let sortState = {};
+function sortTable(tableId, colIdx) {
+  const table = document.getElementById(tableId);
+  const tbody = table.querySelector('tbody');
+  const rows  = [...tbody.querySelectorAll('tr:not(.sub-row)')];
+  const key   = `${tableId}-${colIdx}`;
+  const asc   = sortState[key] !== 'asc';
+  sortState[key] = asc ? 'asc' : 'desc';
+
+  rows.sort((a,b) => {
+    const aCell = a.cells[colIdx];
+    const bCell = b.cells[colIdx];
+    const aVal  = aCell?.dataset?.sort ?? aCell?.textContent?.trim() ?? '';
+    const bVal  = bCell?.dataset?.sort ?? bCell?.textContent?.trim() ?? '';
+    const aNum  = parseFloat(aVal);
+    const bNum  = parseFloat(bVal);
+    if (!isNaN(aNum) && !isNaN(bNum)) return asc ? aNum - bNum : bNum - aNum;
+    return asc ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+  });
+
+  // Update sort indicators
+  table.querySelectorAll('thead th').forEach((th,i) => {
+    th.classList.remove('sorted-asc','sorted-desc');
+    if (i === colIdx) th.classList.add(asc ? 'sorted-asc' : 'sorted-desc');
+  });
+
+  rows.forEach(r => tbody.appendChild(r));
+}
+
+// ─────────────────────────────────────────────
+//  Clear
+// ─────────────────────────────────────────────
+function clearAll() {
+  document.getElementById('company-input').value = '';
+  document.getElementById('results').style.display = 'none';
+  document.getElementById('progress-panel').style.display = 'none';
+  document.getElementById('progress-log').innerHTML = '';
+  setProgress(0);
+  state = { asnRecords:[], upstreamMap:{}, allPrefixes:[], peeringData:[], historyEntries:[] };
+}
+
+// ─────────────────────────────────────────────
+//  Enter key on search input
+// ─────────────────────────────────────────────
+document.getElementById('company-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') startSearch();
+});
+</script>
+</body>
+</html>
