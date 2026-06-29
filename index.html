@@ -693,10 +693,13 @@ async function fetchJ(url) {
 }
 
 const api = {
+  // PeeringDB (networks that register for peering)
   pdbNetByName:   q    => fetchJ(`https://www.peeringdb.com/api/net?name__icontains=${encodeURIComponent(q)}&depth=1&limit=30`),
   pdbOrgByName:   q    => fetchJ(`https://www.peeringdb.com/api/org?name__icontains=${encodeURIComponent(q)}&depth=1&limit=10`),
   pdbNetByOrg:    id   => fetchJ(`https://www.peeringdb.com/api/net?org_id=${id}&depth=1`),
   pdbByASN:       asn  => fetchJ(`https://www.peeringdb.com/api/net?asn=${asn}&depth=2`),
+  // RIPE STAT — covers all 5 RIRs (ARIN, RIPE, APNIC, LACNIC, AFRINIC)
+  ripeSearch:     q    => fetchJ(`https://stat.ripe.net/data/searchcomplete/data.json?resource=${encodeURIComponent(q)}&sourceapp=bgpintel`),
   ripeAnnounced:  asn  => fetchJ(`https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS${asn}&sourceapp=bgpintel`),
   ripeNeighbours: asn  => fetchJ(`https://stat.ripe.net/data/asn-neighbours/data.json?resource=AS${asn}&sourceapp=bgpintel`),
   ripeVisibility: asn  => fetchJ(`https://stat.ripe.net/data/visibility/data.json?resource=AS${asn}&sourceapp=bgpintel`),
@@ -753,41 +756,65 @@ async function discoverASNs(query, usePDB) {
   const vars = nameVariations(query);
   log(`Searching: ${vars.map(v=>'"'+v+'"').join(', ')}`, 'inf');
 
-  if (!usePDB) return [];
-
   const searches = [];
 
-  // PeeringDB net name search (all variations in parallel)
-  for (const v of vars) {
+  // ── RIPE STAT searchcomplete — covers ALL 5 RIRs (ARIN, RIPE, APNIC, LACNIC, AFRINIC) ──
+  // This is the primary source: it finds ASNs even if the company never registered with PeeringDB
+  if (document.getElementById('src-ripe').checked) {
+    for (const v of vars.slice(0, 2)) {
+      searches.push(
+        tryF(() => api.ripeSearch(v), `RIPE search "${v}"`).then(r => {
+          for (const cat of (r?.data?.categories || [])) {
+            if (cat.category !== 'ASNs') continue;
+            for (const s of (cat.suggestions || []).slice(0, 25)) {
+              const m = (s.value || '').match(/^AS(\d+)$/i);
+              if (!m) continue;
+              const asn = parseInt(m[1]);
+              const name = s.description || `AS${asn}`;
+              if (!found.has(asn)) {
+                found.set(asn, { asn, name, source: 'RIPE' });
+                log(`RIPE: AS${asn} — ${name}`, 'src-ripe');
+              }
+            }
+          }
+        })
+      );
+    }
+  }
+
+  // ── PeeringDB net name search ──
+  if (usePDB) {
+    for (const v of vars) {
+      searches.push(
+        tryF(() => api.pdbNetByName(v), `PeeringDB net "${v}"`).then(r => {
+          (r?.data || [])
+            .filter(net => matchesQuery(net.name, query))
+            .forEach(net => {
+              if (net.asn && !found.has(net.asn)) {
+                found.set(net.asn, { asn: net.asn, name: net.name, source: 'PeeringDB' });
+                log(`PDB: AS${net.asn} — ${net.name}`, 'src-pdb');
+              }
+            });
+        })
+      );
+    }
+
+    // PeeringDB org → nets (original query, max 3 orgs)
     searches.push(
-      tryF(() => api.pdbNetByName(v), `PeeringDB net "${v}"`).then(r => {
-        (r?.data || [])
-          .filter(net => matchesQuery(net.name, query))
-          .forEach(net => {
+      tryF(() => api.pdbOrgByName(query), `PeeringDB org "${query}"`).then(async r => {
+        const orgs = (r?.data || []).filter(org => matchesQuery(org.name, query)).slice(0, 3);
+        for (const org of orgs) {
+          const nets = await tryF(() => api.pdbNetByOrg(org.id), `org nets ${org.id}`);
+          (nets?.data || []).forEach(net => {
             if (net.asn && !found.has(net.asn)) {
-              found.set(net.asn, { asn: net.asn, name: net.name, source: 'PeeringDB' });
-              log(`Found: AS${net.asn} — ${net.name}`, 'src-pdb');
+              found.set(net.asn, { asn: net.asn, name: net.name, source: 'PeeringDB/org' });
+              log(`PDB org "${org.name}": AS${net.asn} — ${net.name}`, 'src-pdb');
             }
           });
+        }
       })
     );
   }
-
-  // PeeringDB org → nets (original query only, max 3 orgs)
-  searches.push(
-    tryF(() => api.pdbOrgByName(query), `PeeringDB org "${query}"`).then(async r => {
-      const orgs = (r?.data || []).filter(org => matchesQuery(org.name, query)).slice(0, 3);
-      for (const org of orgs) {
-        const nets = await tryF(() => api.pdbNetByOrg(org.id), `org nets ${org.id}`);
-        (nets?.data || []).forEach(net => {
-          if (net.asn && !found.has(net.asn)) {
-            found.set(net.asn, { asn: net.asn, name: net.name, source: 'PeeringDB/org' });
-            log(`Org "${org.name}": AS${net.asn} — ${net.name}`, 'src-pdb');
-          }
-        });
-      }
-    })
-  );
 
   await Promise.allSettled(searches);
   return [...found.values()];
