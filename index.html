@@ -413,7 +413,7 @@
   .search-hint strong { color: var(--text); }
 
   /* ── Source badges in log ── */
-  .src-bgpview { color: #4af; }
+
   .src-pdb     { color: var(--purple); }
   .src-ripe    { color: var(--green); }
   .src-direct  { color: var(--orange); }
@@ -451,13 +451,12 @@
   </div>
 
   <div class="search-hint">
-    <strong>Tip:</strong> Search searches BGPView, PeeringDB, and RIPE STAT simultaneously.
-    Try short abbreviations ("GTT"), full legal names ("GTT Communications"), or paste comma-separated ASNs.
-    Use the <strong>+ Add ASNs</strong> field above to pin specific ASN numbers directly.
+    <strong>Tip:</strong> Searches PeeringDB and RIPE STAT simultaneously.
+    Try short abbreviations ("GTT"), full legal names ("Intermedia Net"), or paste ASN numbers directly ("AS7713" or "7713,3257").
+    Use the <strong>+ Add ASNs</strong> field above to pin specific ASN numbers.
   </div>
 
   <div class="source-toggles" style="margin-top:10px">
-    <div class="source-toggle"><label><input type="checkbox" id="src-bgpview" checked> BGPView</label></div>
     <div class="source-toggle"><label><input type="checkbox" id="src-peeringdb" checked> PeeringDB</label></div>
     <div class="source-toggle"><label><input type="checkbox" id="src-ripe" checked> RIPE STAT</label></div>
   </div>
@@ -601,16 +600,20 @@
 
 <script>
 // ─────────────────────────────────────────────
+//  Config
+// ─────────────────────────────────────────────
+const MAX_ASNS = 15;
+const FETCH_TIMEOUT_MS = 12000;
+
+// ─────────────────────────────────────────────
 //  State
 // ─────────────────────────────────────────────
 let state = {
-  asnRecords: [],      // enriched ASN objects
-  upstreamMap: {},     // asn -> {name, country, downstream_asns, versions}
-  allPrefixes: [],     // flat list of {asn, name, prefix, version, size, desc, country}
-  peeringData: [],     // peeringdb net objects
-  historyEntries: [],  // {time, asn, type, prefix}
-  totalProgress: 0,
-  maxProgress: 100,
+  asnRecords: [],
+  upstreamMap: {},
+  allPrefixes: [],
+  peeringData: [],
+  historyEntries: [],
 };
 
 // ─────────────────────────────────────────────
@@ -622,7 +625,7 @@ function ipv4Size(prefix) {
 }
 function ipv6In48s(prefix) {
   const len = parseInt(prefix.split('/')[1]);
-  return len <= 48 ? Math.pow(2, 48 - len) : Math.pow(2, Math.max(0, 48 - len));
+  return Math.pow(2, Math.max(0, 48 - len));
 }
 function fmtNum(n) {
   if (n >= 1e9) return (n/1e9).toFixed(2) + 'B';
@@ -635,10 +638,9 @@ function fmtDate(ts) {
   try { return new Date(ts).toLocaleDateString('en-US', {year:'numeric',month:'short',day:'numeric'}); }
   catch { return ts; }
 }
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ─────────────────────────────────────────────
-//  Progress
+//  Progress + Chips
 // ─────────────────────────────────────────────
 function log(msg, cls='') {
   const el = document.getElementById('progress-log');
@@ -652,10 +654,7 @@ function setProgress(pct) {
   document.getElementById('progress-bar').style.width = pct + '%';
 }
 
-// ─────────────────────────────────────────────
-//  Chip / manual ASN state
-// ─────────────────────────────────────────────
-let manualASNs = new Set(); // ASN numbers added manually
+let manualASNs = new Set();
 
 function addChip(asnNum) {
   const n = parseInt(String(asnNum).replace(/^AS/i,''));
@@ -682,141 +681,198 @@ function renderChips() {
 }
 
 // ─────────────────────────────────────────────
-//  API helpers
+//  API — all calls have a hard timeout
 // ─────────────────────────────────────────────
+async function fetchJ(url) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const r = await fetch(url, { signal: ctrl.signal });
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
+
 const api = {
-  bgpviewSearch:  q   => fetch(`https://api.bgpview.io/search?query=${encodeURIComponent(q)}`).then(r=>r.json()),
-  bgpviewASN:     asn => fetch(`https://api.bgpview.io/asn/${asn}`).then(r=>r.json()),
-  bgpviewPfx:     asn => fetch(`https://api.bgpview.io/asn/${asn}/prefixes`).then(r=>r.json()),
-  bgpviewUps:     asn => fetch(`https://api.bgpview.io/asn/${asn}/upstreams`).then(r=>r.json()),
-  pdbByASN:       asn => fetch(`https://www.peeringdb.com/api/net?asn=${asn}&depth=2`).then(r=>r.json()),
-  pdbNetByName:   q   => fetch(`https://www.peeringdb.com/api/net?name__icontains=${encodeURIComponent(q)}&depth=1&limit=50`).then(r=>r.json()),
-  pdbOrgByName:   q   => fetch(`https://www.peeringdb.com/api/org?name__icontains=${encodeURIComponent(q)}&depth=1&limit=20`).then(r=>r.json()),
-  pdbNetByOrg:    id  => fetch(`https://www.peeringdb.com/api/net?org_id=${id}&depth=1`).then(r=>r.json()),
-  ripeVisibility: asn => fetch(`https://stat.ripe.net/data/visibility/data.json?resource=AS${asn}&sourceapp=bgpintel`).then(r=>r.json()),
-  ripeHistory:    asn => fetch(`https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS${asn}&sourceapp=bgpintel`).then(r=>r.json()),
-  ripeWhois:      asn => fetch(`https://stat.ripe.net/data/whois/data.json?resource=AS${asn}&sourceapp=bgpintel`).then(r=>r.json()),
+  pdbNetByName:   q    => fetchJ(`https://www.peeringdb.com/api/net?name__icontains=${encodeURIComponent(q)}&depth=1&limit=30`),
+  pdbOrgByName:   q    => fetchJ(`https://www.peeringdb.com/api/org?name__icontains=${encodeURIComponent(q)}&depth=1&limit=10`),
+  pdbNetByOrg:    id   => fetchJ(`https://www.peeringdb.com/api/net?org_id=${id}&depth=1`),
+  pdbByASN:       asn  => fetchJ(`https://www.peeringdb.com/api/net?asn=${asn}&depth=2`),
+  ripeAnnounced:  asn  => fetchJ(`https://stat.ripe.net/data/announced-prefixes/data.json?resource=AS${asn}&sourceapp=bgpintel`),
+  ripeNeighbours: asn  => fetchJ(`https://stat.ripe.net/data/asn-neighbours/data.json?resource=AS${asn}&sourceapp=bgpintel`),
+  ripeVisibility: asn  => fetchJ(`https://stat.ripe.net/data/visibility/data.json?resource=AS${asn}&sourceapp=bgpintel`),
+  ripeAsNames:    asns => fetchJ(`https://stat.ripe.net/data/as-names/data.json?resource=${asns.map(a=>'AS'+a).join(',')}&sourceapp=bgpintel`),
 };
 
-async function tryFetch(fn, label) {
+async function tryF(fn, label) {
   try { return await fn(); }
-  catch(e) { log(`⚠ ${label}: ${e.message}`, 'err'); return null; }
+  catch(e) {
+    const msg = e.name === 'AbortError' ? 'timeout' : e.message;
+    log(`⚠ ${label}: ${msg}`, 'err');
+    return null;
+  }
 }
 
 // ─────────────────────────────────────────────
-//  Multi-strategy ASN discovery
+//  Discovery — multi-strategy, strict filtering
 // ─────────────────────────────────────────────
 function nameVariations(q) {
   const base = q.trim();
   const vars = new Set([base]);
-  // Capitalised
-  vars.add(base.toUpperCase());
-  // Common suffixes
-  for (const s of ['Communications', 'Networks', 'Telecom', 'Internet', 'Inc', 'LLC', 'Ltd', 'Limited', 'Group', 'Corp']) {
-    vars.add(`${base} ${s}`);
-    vars.add(`${base}, ${s}`);
-  }
-  // Without legal suffix (e.g. "Intermedia Net, LLC" → "Intermedia Net", "Intermedia")
-  const stripped = base.replace(/[,.\s]*(LLC|Inc|Ltd|Limited|Corp|Group|Communications|Networks|Telecom|Internet)\.?$/i,'').trim();
+  const stripped = base.replace(/[,.\s]*(LLC|Inc\.?|Ltd\.?|Limited|Corp\.?|Group|Communications|Networks|Telecom|Internet|Net)\.?$/i,'').trim();
   if (stripped && stripped !== base) {
     vars.add(stripped);
     const words = stripped.split(/\s+/);
-    if (words.length > 1) vars.add(words[0]); // first word only
+    if (words.length > 1) vars.add(words[0]);
   }
-  return [...vars].filter(Boolean).slice(0, 8);
+  return [...vars].filter(Boolean).slice(0, 4);
 }
 
-async function discoverASNs(query, useBGPView, usePDB) {
-  const found = new Map(); // asn -> {asn, name, source}
+// Post-filter: every non-trivial word in the query must appear in the name
+function matchesQuery(name, query) {
+  const n = (name || '').toLowerCase();
+  const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !/^(llc|inc|ltd|net|com)$/i.test(w));
+  return words.length === 0 || words.every(w => n.includes(w));
+}
 
-  // ── Detect direct ASN input ──
-  // Matches: "AS3257", "3257", "3257,5539", "AS3257 AS5539"
-  const asnPattern = /\b(\d{2,10})\b/g;
-  const cleaned = query.replace(/^AS/i,'');
-  if (/^(AS)?\d+$/i.test(query.trim()) || /^\d[\d,\s]+\d$/.test(query.trim())) {
-    let m;
-    while ((m = asnPattern.exec(cleaned)) !== null) {
+async function discoverASNs(query, usePDB) {
+  const found = new Map();
+
+  // Direct ASN input: "3257", "AS3257", "3257,5539"
+  const cleaned = query.replace(/AS/gi,'');
+  if (/^[\d,\s]+$/.test(cleaned.trim())) {
+    for (const m of cleaned.matchAll(/\b(\d{2,10})\b/g)) {
       const n = parseInt(m[1]);
-      if (n > 0 && n < 4294967295) {
-        found.set(n, { asn: n, name: `AS${n}`, source: 'direct' });
-      }
+      if (n > 0 && n < 4294967295) found.set(n, { asn:n, name:`AS${n}`, source:'direct' });
     }
     if (found.size) {
-      log(`Direct ASN input: ${[...found.keys()].map(a=>'AS'+a).join(', ')}`, 'src-direct');
+      log(`Direct ASN(s): ${[...found.keys()].map(a=>'AS'+a).join(', ')}`, 'src-direct');
       return [...found.values()];
     }
   }
 
   const vars = nameVariations(query);
-  log(`Trying ${vars.length} name variant(s): ${vars.slice(0,3).map(v=>'"'+v+'"').join(', ')}${vars.length>3?' …':''}`, 'inf');
+  log(`Searching: ${vars.map(v=>'"'+v+'"').join(', ')}`, 'inf');
+
+  if (!usePDB) return [];
 
   const searches = [];
 
-  // ── BGPView search (one request per variation, run in parallel) ──
-  if (useBGPView) {
-    for (const v of vars.slice(0, 4)) {
-      searches.push(
-        tryFetch(() => api.bgpviewSearch(v), `BGPView "${v}"`).then(r => {
-          const hits = r?.data?.asns || [];
-          hits.forEach(a => {
-            if (!found.has(a.asn)) {
-              found.set(a.asn, { asn: a.asn, name: a.name || a.description, source: 'BGPView' });
-              log(`BGPView: AS${a.asn} ${a.name||''}`, 'src-bgpview');
-            }
-          });
-        })
-      );
-    }
-  }
-
-  // ── PeeringDB net name search ──
-  if (usePDB) {
-    for (const v of vars.slice(0, 3)) {
-      searches.push(
-        tryFetch(() => api.pdbNetByName(v), `PeeringDB net "${v}"`).then(r => {
-          (r?.data || []).forEach(net => {
+  // PeeringDB net name search (all variations in parallel)
+  for (const v of vars) {
+    searches.push(
+      tryF(() => api.pdbNetByName(v), `PeeringDB net "${v}"`).then(r => {
+        (r?.data || [])
+          .filter(net => matchesQuery(net.name, query))
+          .forEach(net => {
             if (net.asn && !found.has(net.asn)) {
               found.set(net.asn, { asn: net.asn, name: net.name, source: 'PeeringDB' });
-              log(`PeeringDB: AS${net.asn} ${net.name}`, 'src-pdb');
+              log(`Found: AS${net.asn} — ${net.name}`, 'src-pdb');
             }
           });
-        })
-      );
-    }
-
-    // ── PeeringDB org → nets ──
-    searches.push(
-      tryFetch(() => api.pdbOrgByName(query), `PeeringDB org "${query}"`).then(async r => {
-        for (const org of (r?.data || []).slice(0, 5)) {
-          const nets = await tryFetch(() => api.pdbNetByOrg(org.id), `PeeringDB nets for org ${org.id}`);
-          (nets?.data || []).forEach(net => {
-            if (net.asn && !found.has(net.asn)) {
-              found.set(net.asn, { asn: net.asn, name: net.name, source: 'PeeringDB/org' });
-              log(`PeeringDB org "${org.name}": AS${net.asn} ${net.name}`, 'src-pdb');
-            }
-          });
-        }
       })
     );
   }
+
+  // PeeringDB org → nets (original query only, max 3 orgs)
+  searches.push(
+    tryF(() => api.pdbOrgByName(query), `PeeringDB org "${query}"`).then(async r => {
+      const orgs = (r?.data || []).filter(org => matchesQuery(org.name, query)).slice(0, 3);
+      for (const org of orgs) {
+        const nets = await tryF(() => api.pdbNetByOrg(org.id), `org nets ${org.id}`);
+        (nets?.data || []).forEach(net => {
+          if (net.asn && !found.has(net.asn)) {
+            found.set(net.asn, { asn: net.asn, name: net.name, source: 'PeeringDB/org' });
+            log(`Org "${org.name}": AS${net.asn} — ${net.name}`, 'src-pdb');
+          }
+        });
+      }
+    })
+  );
 
   await Promise.allSettled(searches);
   return [...found.values()];
 }
 
 // ─────────────────────────────────────────────
-//  Main search flow
+//  Enrich one ASN (runs in parallel across ASNs)
+// ─────────────────────────────────────────────
+async function enrichASN(asnObj, useRIPE, usePDB) {
+  const asn = asnObj.asn;
+  const rec = {
+    asn, name: asnObj.name || `AS${asn}`,
+    description:'', country: asnObj.country||'', rir:'', website:'', infoType:'',
+    ipv4Prefixes:[], ipv6Prefixes:[],
+    ipv4Total:0, ipv6Total48s:0,
+    upstreams:[], visibility:null, peeringdb:null,
+  };
+
+  // Fire all requests for this ASN in parallel
+  const [announcedRes, neighboursRes, visRes, pdbRes] = await Promise.all([
+    useRIPE ? tryF(() => api.ripeAnnounced(asn),  `RIPE pfx AS${asn}`)       : null,
+    useRIPE ? tryF(() => api.ripeNeighbours(asn), `RIPE nbr AS${asn}`)       : null,
+    useRIPE ? tryF(() => api.ripeVisibility(asn), `RIPE vis AS${asn}`)       : null,
+    usePDB  ? tryF(() => api.pdbByASN(asn),       `PeeringDB AS${asn}`)      : null,
+  ]);
+
+  // ── Prefixes + history ──
+  for (const p of (announcedRes?.data?.prefixes || [])) {
+    const isV6 = p.prefix.includes(':');
+    (isV6 ? rec.ipv6Prefixes : rec.ipv4Prefixes).push({ prefix: p.prefix, description:'', country:'' });
+    for (const tl of (p.timelines||[])) {
+      if (tl.starttime) state.historyEntries.push({ time:tl.starttime, asn, asnName:rec.name, type:'A', prefix:p.prefix });
+      if (tl.endtime)   state.historyEntries.push({ time:tl.endtime,   asn, asnName:rec.name, type:'W', prefix:p.prefix });
+    }
+  }
+  rec.ipv4Total    = rec.ipv4Prefixes.reduce((s,p) => s + ipv4Size(p.prefix), 0);
+  rec.ipv6Total48s = rec.ipv6Prefixes.reduce((s,p) => s + ipv6In48s(p.prefix), 0);
+
+  // ── Upstreams (type:"left") ──
+  for (const nb of (neighboursRes?.data?.neighbours || [])) {
+    if (nb.type !== 'left') continue;
+    rec.upstreams.push(nb);
+    if (!state.upstreamMap[nb.asn]) {
+      state.upstreamMap[nb.asn] = {
+        asn: nb.asn, name:`AS${nb.asn}`, country:'—',
+        downstream_asns: new Set(),
+        v4_peers: nb.v4_peers||0, v6_peers: nb.v6_peers||0, power: nb.power||0,
+      };
+    }
+    state.upstreamMap[nb.asn].downstream_asns.add(asn);
+  }
+
+  // ── Visibility ──
+  if (visRes?.data?.visibility) {
+    rec.visibility = visRes.data.visibility.v4?.ratio_of_total_visibility_24h
+                  ?? visRes.data.visibility.v6?.ratio_of_total_visibility_24h ?? null;
+  }
+
+  // ── PeeringDB ──
+  if (pdbRes?.data?.length) {
+    const net = pdbRes.data[0];
+    rec.peeringdb = net; rec.infoType = net.info_type||''; rec.website = net.website||'';
+    if (rec.name === `AS${asn}`) rec.name = net.name || rec.name;
+    state.peeringData.push({ asn, name: rec.name, net });
+  }
+
+  // Flat prefix list
+  for (const p of rec.ipv4Prefixes)
+    state.allPrefixes.push({ asn, asnName:rec.name, prefix:p.prefix, version:4, size:ipv4Size(p.prefix), desc:'—', country:rec.country });
+  for (const p of rec.ipv6Prefixes)
+    state.allPrefixes.push({ asn, asnName:rec.name, prefix:p.prefix, version:6, size:ipv6In48s(p.prefix), desc:'—', country:rec.country });
+
+  state.asnRecords.push(rec);
+  log(`AS${asn}: ${rec.ipv4Prefixes.length}×v4 ${rec.ipv6Prefixes.length}×v6 — ${rec.upstreams.length} upstreams`, 'ok');
+}
+
+// ─────────────────────────────────────────────
+//  Main search
 // ─────────────────────────────────────────────
 async function startSearch() {
-  const query = document.getElementById('company-input').value.trim();
-  const useBGPView   = document.getElementById('src-bgpview').checked;
-  const useRIPE      = document.getElementById('src-ripe').checked;
-  const usePeeringDB = document.getElementById('src-peeringdb').checked;
-
-  // Must have name query OR manual chips
+  const query    = document.getElementById('company-input').value.trim();
+  const usePDB   = document.getElementById('src-peeringdb').checked;
+  const useRIPE  = document.getElementById('src-ripe').checked;
   if (!query && manualASNs.size === 0) return;
 
-  // Reset
   state = { asnRecords:[], upstreamMap:{}, allPrefixes:[], peeringData:[], historyEntries:[] };
   document.getElementById('results').style.display = 'none';
   document.getElementById('progress-panel').style.display = 'block';
@@ -824,322 +880,154 @@ async function startSearch() {
   document.getElementById('search-btn').disabled = true;
   setProgress(5);
 
-  log(`Searching: "${query || '(manual ASNs only)'}"`, 'inf');
+  log(`Searching: "${query || '(ASNs only)'}"`, 'inf');
 
-  // ── Step 1: Discover ASNs ──
-  let asnList = [];
-
-  if (query) {
-    const discovered = await discoverASNs(query, useBGPView, usePeeringDB);
-    asnList.push(...discovered);
-  }
-
-  // Add manual chips
+  // Step 1: Discover
+  let asnList = query ? await discoverASNs(query, usePDB) : [];
   for (const n of manualASNs) {
-    if (!asnList.find(a => a.asn === n)) {
-      asnList.push({ asn: n, name: `AS${n}`, source: 'manual' });
-      log(`Manual: AS${n}`, 'src-direct');
-    }
+    if (!asnList.find(a => a.asn === n)) asnList.push({ asn:n, name:`AS${n}`, source:'manual' });
   }
+
+  // Deduplicate
+  const seenA = new Set();
+  asnList = asnList.filter(a => { if (seenA.has(a.asn)) return false; seenA.add(a.asn); return true; });
 
   if (asnList.length === 0) {
-    log('', '');
-    log('No ASNs found across all sources. Tips:', 'err');
-    log('• Try a shorter name: "GTT" instead of "GTT Communications Inc."', 'err');
-    log('• Try the legal entity name from ARIN/RIPE WHOIS', 'err');
-    log('• Use the "+ Add ASNs" field above to enter a known ASN number directly', 'err');
+    log('No ASNs found. Try:', 'err');
+    log('• A shorter name or just the first word', 'err');
+    log('• Type "AS12345" to search a specific ASN', 'err');
+    log('• Use "+ Add ASNs" above to pin ASN numbers directly', 'err');
     document.getElementById('search-btn').disabled = false;
     return;
   }
 
-  // Deduplicate
-  const seen = new Set();
-  let asns = asnList.filter(a => { if (seen.has(a.asn)) return false; seen.add(a.asn); return true; });
-
-  setProgress(15);
-  log(`Found ${asns.length} unique ASN(s) — enriching…`, 'inf');
-
-  // ── Step 2: Enrich each ASN ──
-  const step = 60 / asns.length;
-  let prog = 15;
-
-  for (const asnObj of asns) {
-    const asn = asnObj.asn;
-    log(`Enriching AS${asn} (${asnObj.name || '—'})…`);
-
-    const rec = {
-      ...asnObj,
-      ipv4Prefixes: [], ipv6Prefixes: [],
-      ipv4Total: 0, ipv6Total48s: 0,
-      upstreams: [], visibility: null,
-      peeringdb: null, history: [],
-      website: '', infoType: '', rir: '', country: asnObj.country || '',
-    };
-
-    // ── BGPView: detail + prefixes + upstreams (parallel) ──
-    if (useBGPView) {
-      const [detail, pfxRes, upsRes] = await Promise.all([
-        tryFetch(() => api.bgpviewASN(asn),  `BGPView detail AS${asn}`),
-        tryFetch(() => api.bgpviewPfx(asn),  `BGPView prefixes AS${asn}`),
-        tryFetch(() => api.bgpviewUps(asn),  `BGPView upstreams AS${asn}`),
-      ]);
-
-      if (detail?.data) {
-        rec.name        = detail.data.name || rec.name;
-        rec.description = detail.data.description_short || rec.description;
-        rec.website     = detail.data.website || '';
-        rec.rir         = detail.data.rir_allocation?.rir_name || '';
-        rec.country     = detail.data.country_code || rec.country;
-      }
-
-      if (pfxRes?.data) {
-        rec.ipv4Prefixes = (pfxRes.data.ipv4_prefixes || []).map(p => ({
-          prefix: p.prefix, name: p.name, description: p.description, country: p.country_code
-        }));
-        rec.ipv6Prefixes = (pfxRes.data.ipv6_prefixes || []).map(p => ({
-          prefix: p.prefix, name: p.name, description: p.description, country: p.country_code
-        }));
-        rec.ipv4Total    = rec.ipv4Prefixes.reduce((s,p) => s + ipv4Size(p.prefix), 0);
-        rec.ipv6Total48s = rec.ipv6Prefixes.reduce((s,p) => s + ipv6In48s(p.prefix), 0);
-      }
-
-      if (upsRes?.data) {
-        const v4 = (upsRes.data.ipv4_upstreams || []).map(u => ({ ...u, version: 4 }));
-        const v6 = (upsRes.data.ipv6_upstreams || []).map(u => ({ ...u, version: 6 }));
-        rec.upstreams = [...v4, ...v6];
-        for (const u of rec.upstreams) {
-          if (!state.upstreamMap[u.asn]) {
-            state.upstreamMap[u.asn] = {
-              asn: u.asn, name: u.name || u.description, country: u.country_code || '—',
-              downstream_asns: new Set(), versions: new Set()
-            };
-          }
-          state.upstreamMap[u.asn].downstream_asns.add(asn);
-          state.upstreamMap[u.asn].versions.add(u.version);
-        }
-      }
-
-      // If BGPView gave us no prefixes, fall through to RIPE for prefix data
-      if (rec.ipv4Prefixes.length === 0 && rec.ipv6Prefixes.length === 0 && useRIPE) {
-        log(`AS${asn}: BGPView found no prefixes — trying RIPE announced-prefixes`, 'src-ripe');
-        const ripePfx = await tryFetch(() => api.ripeHistory(asn), `RIPE prefixes AS${asn}`);
-        const pfxList = ripePfx?.data?.prefixes || [];
-        for (const p of pfxList) {
-          const ver = p.prefix.includes(':') ? 6 : 4;
-          if (ver === 4) rec.ipv4Prefixes.push({ prefix: p.prefix, name:'', description:'', country:'' });
-          else           rec.ipv6Prefixes.push({ prefix: p.prefix, name:'', description:'', country:'' });
-        }
-        rec.ipv4Total    = rec.ipv4Prefixes.reduce((s,p) => s + ipv4Size(p.prefix), 0);
-        rec.ipv6Total48s = rec.ipv6Prefixes.reduce((s,p) => s + ipv6In48s(p.prefix), 0);
-      }
-
-      await sleep(150);
-    }
-
-    // ── RIPE STAT: visibility + history (parallel) ──
-    if (useRIPE) {
-      const [visRes, histRes] = await Promise.all([
-        tryFetch(() => api.ripeVisibility(asn), `RIPE visibility AS${asn}`),
-        tryFetch(() => api.ripeHistory(asn),    `RIPE history AS${asn}`),
-      ]);
-
-      if (visRes?.data?.visibility) {
-        rec.visibility = visRes.data.visibility.v4?.ratio_of_total_visibility_24h
-                      ?? visRes.data.visibility.v6?.ratio_of_total_visibility_24h ?? null;
-      }
-
-      // If BGPView was off, use RIPE for prefixes
-      if (!useBGPView && histRes?.data?.prefixes) {
-        const pfxList = histRes.data.prefixes;
-        for (const p of pfxList) {
-          const ver = p.prefix.includes(':') ? 6 : 4;
-          if (ver === 4) rec.ipv4Prefixes.push({ prefix: p.prefix, name:'', description:'', country:'' });
-          else           rec.ipv6Prefixes.push({ prefix: p.prefix, name:'', description:'', country:'' });
-        }
-        rec.ipv4Total    = rec.ipv4Prefixes.reduce((s,p) => s + ipv4Size(p.prefix), 0);
-        rec.ipv6Total48s = rec.ipv6Prefixes.reduce((s,p) => s + ipv6In48s(p.prefix), 0);
-      }
-
-      // History entries from announced-prefixes timelines
-      if (histRes?.data?.prefixes) {
-        for (const p of histRes.data.prefixes) {
-          const pfx = p.prefix;
-          for (const tl of (p.timelines || [])) {
-            if (tl.starttime) state.historyEntries.push({ time: tl.starttime, asn, asnName: rec.name, type: 'A', prefix: pfx });
-            if (tl.endtime)   state.historyEntries.push({ time: tl.endtime,   asn, asnName: rec.name, type: 'W', prefix: pfx });
-          }
-          if (!p.timelines?.length && p.first_seen) {
-            state.historyEntries.push({ time: p.first_seen, asn, asnName: rec.name, type: 'A', prefix: pfx });
-          }
-        }
-      }
-      await sleep(150);
-    }
-
-    // ── PeeringDB ──
-    if (usePeeringDB) {
-      const pdbRes = await tryFetch(() => api.pdbByASN(asn), `PeeringDB AS${asn}`);
-      if (pdbRes?.data?.length) {
-        const net = pdbRes.data[0];
-        rec.peeringdb = net;
-        rec.infoType  = net.info_type || '';
-        state.peeringData.push({ asn, name: rec.name, net });
-      }
-      await sleep(100);
-    }
-
-    state.asnRecords.push(rec);
-
-    // Add to flat prefix list
-    for (const p of rec.ipv4Prefixes) {
-      state.allPrefixes.push({ asn, asnName: rec.name, prefix: p.prefix, version: 4,
-        size: ipv4Size(p.prefix), desc: p.description || p.name || '—', country: p.country || rec.country });
-    }
-    for (const p of rec.ipv6Prefixes) {
-      state.allPrefixes.push({ asn, asnName: rec.name, prefix: p.prefix, version: 6,
-        size: ipv6In48s(p.prefix), desc: p.description || p.name || '—', country: p.country || rec.country });
-    }
-
-    log(`AS${asn}: ${rec.ipv4Prefixes.length} v4 pfx, ${rec.ipv6Prefixes.length} v6 pfx, ${rec.upstreams.length} upstreams`, 'ok');
-    prog += step;
-    setProgress(Math.min(prog, 85));
+  // Cap
+  if (asnList.length > MAX_ASNS) {
+    log(`Capping at ${MAX_ASNS} of ${asnList.length} found (use "+ Add ASNs" to target specific ones)`, 'inf');
+    asnList = asnList.slice(0, MAX_ASNS);
   }
 
-  // Sort ASN records by IPv4 total (desc)
-  state.asnRecords.sort((a,b) => (b.ipv4Total + b.ipv6Total48s) - (a.ipv4Total + a.ipv6Total48s));
+  setProgress(20);
+  log(`Enriching ${asnList.length} ASN(s) in parallel…`, 'inf');
 
-  setProgress(90);
-  log('Rendering results…', 'inf');
+  // Step 2: Enrich all ASNs simultaneously
+  await Promise.all(asnList.map(a => enrichASN(a, useRIPE, usePDB)));
+
+  setProgress(80);
+
+  // Step 3: Batch-resolve upstream names
+  const upASNs = Object.keys(state.upstreamMap).map(Number);
+  if (upASNs.length && useRIPE) {
+    for (let i = 0; i < upASNs.length; i += 50) {
+      const chunk = upASNs.slice(i, i+50);
+      const nr = await tryF(() => api.ripeAsNames(chunk), 'RIPE as-names batch');
+      for (const [asnStr, fullName] of Object.entries(nr?.data?.names || {})) {
+        const n = parseInt(asnStr);
+        if (state.upstreamMap[n]) state.upstreamMap[n].name = fullName;
+      }
+    }
+    log(`Resolved ${upASNs.length} upstream names`, 'ok');
+  }
+
+  setProgress(95);
+  state.asnRecords.sort((a,b) => (b.ipv4Total+b.ipv6Total48s)-(a.ipv4Total+a.ipv6Total48s));
   renderAll();
   setProgress(100);
-  log('Done.', 'ok');
-
+  log(`Complete — ${state.asnRecords.length} ASNs · ${state.allPrefixes.length} prefixes · ${upASNs.length} upstreams`, 'ok');
   document.getElementById('results').style.display = 'block';
   document.getElementById('search-btn').disabled = false;
-  setTimeout(() => { document.getElementById('progress-panel').style.display = 'none'; }, 3000);
+  setTimeout(() => { document.getElementById('progress-panel').style.display = 'none'; }, 4000);
 }
 
 // ─────────────────────────────────────────────
-//  Render functions
+//  Render
 // ─────────────────────────────────────────────
 function renderAll() {
-  renderStats();
-  renderASNTable();
-  renderUpstreams();
-  renderPrefixes();
-  renderPeering();
-  renderHistory();
+  renderStats(); renderASNTable(); renderUpstreams();
+  renderPrefixes(); renderPeering(); renderHistory();
 }
 
 function renderStats() {
   const recs = state.asnRecords;
-  const totalV4IPs = recs.reduce((s,r) => s + r.ipv4Total, 0);
-  const totalV6pfx = recs.reduce((s,r) => s + r.ipv6Prefixes.length, 0);
-  const totalV4pfx = recs.reduce((s,r) => s + r.ipv4Prefixes.length, 0);
-  const upCount    = Object.keys(state.upstreamMap).length;
-  const ixpCount   = state.peeringData.reduce((s,d) => s + (d.net?.netixlan_set?.length || 0), 0);
-  const rirs       = [...new Set(recs.map(r => r.rir).filter(Boolean))].join(', ') || 'Multiple';
-
-  document.getElementById('stat-asns').textContent  = recs.length;
-  document.getElementById('stat-rirs').textContent  = rirs;
-  document.getElementById('stat-v4').textContent    = fmtNum(totalV4IPs);
-  document.getElementById('stat-v4-pfx').textContent = `${totalV4pfx} prefixes`;
-  document.getElementById('stat-v6').textContent    = totalV6pfx;
+  const upCount  = Object.keys(state.upstreamMap).length;
+  const ixpCount = state.peeringData.reduce((s,d) => s+(d.net?.netixlan_set?.length||0), 0);
+  document.getElementById('stat-asns').textContent   = recs.length;
+  document.getElementById('stat-rirs').textContent   = 'ASNs found';
+  document.getElementById('stat-v4').textContent     = fmtNum(recs.reduce((s,r)=>s+r.ipv4Total,0));
+  document.getElementById('stat-v4-pfx').textContent = `${recs.reduce((s,r)=>s+r.ipv4Prefixes.length,0)} prefixes`;
+  document.getElementById('stat-v6').textContent     = recs.reduce((s,r)=>s+r.ipv6Prefixes.length,0);
   document.getElementById('stat-v6-pfx').textContent = 'announced routes';
-  document.getElementById('stat-ups').textContent   = upCount;
-  document.getElementById('stat-ixp').textContent   = ixpCount || '—';
-
-  document.getElementById('badge-asn').textContent  = recs.length;
-  document.getElementById('badge-ups').textContent  = upCount;
-  document.getElementById('badge-pfx').textContent  = state.allPrefixes.length;
-  document.getElementById('badge-peer').textContent = state.peeringData.length;
-  document.getElementById('badge-hist').textContent = state.historyEntries.length;
+  document.getElementById('stat-ups').textContent    = upCount;
+  document.getElementById('stat-ixp').textContent    = ixpCount || '—';
+  document.getElementById('badge-asn').textContent   = recs.length;
+  document.getElementById('badge-ups').textContent   = upCount;
+  document.getElementById('badge-pfx').textContent   = state.allPrefixes.length;
+  document.getElementById('badge-peer').textContent  = state.peeringData.length;
+  document.getElementById('badge-hist').textContent  = state.historyEntries.length;
 }
 
 function renderASNTable() {
-  const recs = state.asnRecords;
-  const maxV4 = Math.max(...recs.map(r => r.ipv4Total), 1);
-  const maxV6 = Math.max(...recs.map(r => r.ipv6Total48s), 1);
-
+  const recs  = state.asnRecords;
+  const maxV4 = Math.max(...recs.map(r=>r.ipv4Total), 1);
+  const maxV6 = Math.max(...recs.map(r=>r.ipv6Total48s), 1);
   const tbody = document.getElementById('asn-table-body');
   tbody.innerHTML = '';
-
-  recs.forEach((rec, i) => {
-    const v4pct = Math.round((rec.ipv4Total / maxV4) * 100);
-    const v6pct = Math.round((rec.ipv6Total48s / maxV6) * 100);
-    const visPct = rec.visibility != null ? Math.round(rec.visibility * 100) + '%' : '—';
-    const rirBadge = rec.rir ? `<span class="pill pill-muted">${rec.rir}</span>` : '—';
+  recs.forEach((rec,i) => {
+    const v4pct   = Math.round(rec.ipv4Total/maxV4*100);
+    const v6pct   = Math.round(rec.ipv6Total48s/maxV6*100);
+    const visPct  = rec.visibility!=null ? Math.round(rec.visibility*100)+'%' : '—';
     const typeBadge = rec.infoType ? `<span class="pill pill-purple">${rec.infoType}</span>` : '—';
-    const nameDisplay = rec.name || rec.description || '—';
-    const website = rec.website ? `<a href="${rec.website}" target="_blank" style="color:var(--accent);font-size:11px;display:block">${rec.website.replace(/^https?:\/\//,'')}</a>` : '';
-
+    const website = rec.website ? `<a href="${rec.website}" target="_blank" style="color:var(--accent);font-size:11px;display:block">${rec.website.replace(/^https?:\/\//,'').substring(0,35)}</a>` : '';
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td style="color:var(--muted);font-weight:700">#${i+1}</td>
       <td><span class="mono" style="color:var(--accent)">AS${rec.asn}</span></td>
-      <td><strong style="color:#fff">${nameDisplay}</strong>${website}</td>
-      <td>${rec.country || '—'}</td>
-      <td>${rirBadge}</td>
+      <td><strong style="color:#fff">${rec.name||'—'}</strong>${website}</td>
+      <td>${rec.country||'—'}</td>
+      <td>${rec.rir?`<span class="pill pill-muted">${rec.rir}</span>`:'—'}</td>
       <td data-sort="${rec.ipv4Prefixes.length}"><span class="pill pill-green">${rec.ipv4Prefixes.length}</span></td>
       <td data-sort="${rec.ipv4Total}">
-        <div class="bar-wrap">
-          <div class="bar-track"><div class="bar-fill bar-v4" style="width:${v4pct}%"></div></div>
-          <div class="bar-num">${fmtNum(rec.ipv4Total)} IPs</div>
-        </div>
+        <div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-v4" style="width:${v4pct}%"></div></div>
+        <div class="bar-num">${fmtNum(rec.ipv4Total)} IPs</div></div>
       </td>
       <td data-sort="${rec.ipv6Prefixes.length}"><span class="pill pill-blue">${rec.ipv6Prefixes.length}</span></td>
       <td data-sort="${rec.ipv6Total48s}">
-        <div class="bar-wrap">
-          <div class="bar-track"><div class="bar-fill bar-v6" style="width:${v6pct}%"></div></div>
-          <div class="bar-num">${fmtNum(rec.ipv6Total48s)} /48s</div>
-        </div>
+        <div class="bar-wrap"><div class="bar-track"><div class="bar-fill bar-v6" style="width:${v6pct}%"></div></div>
+        <div class="bar-num">${fmtNum(rec.ipv6Total48s)} /48s</div></div>
       </td>
       <td><span style="color:${visPct==='—'?'var(--muted)':parseInt(visPct)>80?'var(--green)':'var(--yellow)'}">${visPct}</span></td>
-      <td>${typeBadge}</td>
-    `;
+      <td>${typeBadge}</td>`;
     tbody.appendChild(tr);
   });
 }
 
 function renderUpstreams() {
   const ups = Object.values(state.upstreamMap)
-    .map(u => ({ ...u, downstream_asns: [...u.downstream_asns], versions: [...u.versions] }))
-    .sort((a,b) => b.downstream_asns.length - a.downstream_asns.length);
-
+    .map(u => ({ ...u, downstream_asns: [...u.downstream_asns] }))
+    .sort((a,b) => (b.power||0)-(a.power||0) || b.downstream_asns.length-a.downstream_asns.length);
   const tbody = document.getElementById('ups-table-body');
   tbody.innerHTML = '';
-
   for (const u of ups) {
-    const verBadges = u.versions.map(v =>
-      `<span class="pill ${v===4?'pill-green':'pill-blue'}">IPv${v}</span>`
-    ).join(' ');
-
-    // Look up peeringdb info for upstream ASN
-    const pdbEntry = state.peeringData.find(p => p.asn === u.asn);
-    const pdbInfo = pdbEntry
-      ? `<span class="pill pill-purple">${pdbEntry.net?.info_type||'Listed'}</span> ${pdbEntry.net?.info_traffic?`<span style="color:var(--muted);font-size:11px">${pdbEntry.net.info_traffic}</span>`:''}`
-      : '<span style="color:var(--muted);font-size:11px">—</span>';
-
-    const downstreamList = u.downstream_asns.map(a => `<span class="pill pill-muted">AS${a}</span>`).join(' ');
-
+    const verBadges = [u.v4_peers>0?'<span class="pill pill-green">IPv4</span>':'', u.v6_peers>0?'<span class="pill pill-blue">IPv6</span>':''].filter(Boolean).join(' ') || '—';
+    const pdbEntry  = state.peeringData.find(p => p.asn === u.asn);
+    const pdbInfo   = pdbEntry ? `<span class="pill pill-purple">${pdbEntry.net?.info_type||'Listed'}</span>` : '—';
+    const downList  = u.downstream_asns.map(a=>`<span class="pill pill-muted">AS${a}</span>`).join(' ');
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td><span class="mono" style="color:var(--orange)">AS${u.asn}</span></td>
-      <td><strong style="color:#fff">${u.name || '—'}</strong></td>
-      <td>${u.country || '—'}</td>
+      <td><strong style="color:#fff">${u.name||'—'}</strong></td>
+      <td>${u.country||'—'}</td>
       <td data-sort="${u.downstream_asns.length}">
         <span class="pill pill-orange">${u.downstream_asns.length}</span>
-        <div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:3px">${downstreamList}</div>
+        <div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:3px">${downList}</div>
       </td>
       <td>${verBadges}</td>
-      <td>${pdbInfo}</td>
-    `;
+      <td>${pdbInfo} <span style="color:var(--muted);font-size:11px">power:${u.power||0}</span></td>`;
     tbody.appendChild(tr);
   }
-
-  if (ups.length === 0) {
+  if (!ups.length) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td colspan="6" style="text-align:center;color:var(--muted);padding:30px">No upstream data found</td>`;
+    tr.innerHTML = `<td colspan="6" style="text-align:center;color:var(--muted);padding:30px">No upstream data</td>`;
     tbody.appendChild(tr);
   }
 }
