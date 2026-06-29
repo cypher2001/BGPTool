@@ -590,7 +590,7 @@
               </div>
               <div style="display:flex;align-items:center;gap:8px">
                 <div style="width:12px;height:12px;border-radius:2px;background:var(--yellow);flex-shrink:0"></div>
-                <span><strong style="color:var(--yellow)">25–59 pts</strong> — Secondary or partial transit. May be a backup provider, single-PoP connection, or regional carrier carrying a subset of prefixes.</span>
+                <span><strong style="color:var(--yellow)">25–59 pts — Backup / Secondary transit.</strong> Active but not primary. Typical for backup providers, failover paths, single-PoP connections, or regional carriers carrying a subset of prefixes.</span>
               </div>
               <div style="display:flex;align-items:center;gap:8px">
                 <div style="width:12px;height:12px;border-radius:2px;background:#e05;flex-shrink:0"></div>
@@ -1175,7 +1175,7 @@ function renderUpstreams() {
     const powerVal  = u.power || 0;
     const powerPct  = Math.round(powerVal / maxPower * 100);
     // Power colour: green=high, yellow=medium, red=low (likely historical)
-    const powerColor = powerPct >= 60 ? 'var(--green)' : powerPct >= 25 ? 'var(--yellow)' : '#e05';
+    const powerColor = powerVal >= 60 ? 'var(--green)' : powerVal >= 25 ? 'var(--yellow)' : '#e05';
 
     // Tally prefixes that customers advertise through this upstream
     let totalV4Pfx = 0, totalV4IPs = 0, totalV6Pfx = 0;
@@ -1209,7 +1209,7 @@ function renderUpstreams() {
           <div class="bar-track"><div class="bar-fill" style="width:${powerPct}%;background:${powerColor}"></div></div>
           <div class="bar-num" style="color:${powerColor}">${powerVal} pts</div>
         </div>
-        ${powerPct < 25 ? '<div style="font-size:10px;color:#e05;margin-top:2px">⚠ may be historical</div>' : ''}
+        ${powerVal < 25 ? '<div style="font-size:10px;color:#e05;margin-top:2px">⚠ may be historical</div>' : ''}
       </td>
       <td data-sort="${totalV4IPs}">${pfxCell}</td>
       <td>${pdbInfo}</td>`;
